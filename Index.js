@@ -29,6 +29,7 @@ db.serialize(() => {
     db.run('CREATE TABLE IF NOT EXISTS quiz_cooldown (userId TEXT PRIMARY KEY, lastUsed INTEGER NOT NULL)');
     db.run('CREATE TABLE IF NOT EXISTS quiz_history (userId TEXT PRIMARY KEY, askedIds TEXT NOT NULL)');
     db.run('CREATE TABLE IF NOT EXISTS guild_users (guildId TEXT NOT NULL, userId TEXT NOT NULL, PRIMARY KEY (guildId, userId))');
+    db.run('CREATE TABLE IF NOT EXISTS quiz_stats (userId TEXT PRIMARY KEY, correct INTEGER NOT NULL DEFAULT 0, wrong INTEGER NOT NULL DEFAULT 0)');
 });
 
 // ---------------------------
@@ -61,7 +62,7 @@ const setActiveQuestion = (userId, quizId) => new Promise((res, rej) => {
 });
 
 const getActiveQuestion = userId => new Promise((res, rej) => {
-    db.get('SELECT quizId FROM user_quiz WHERE userId = ?', [userId], (e, r) => e ? rej(e) : res(r || null));
+    db.get('SELECT quizId, askedAt FROM user_quiz WHERE userId = ?', [userId], (e, r) => e ? rej(e) : res(r || null));
 });
 
 const clearActiveQuestion = userId => new Promise((res, rej) => db.run('DELETE FROM user_quiz WHERE userId = ?', [userId], e => e ? rej(e) : res()));
@@ -87,6 +88,21 @@ const upsertGuildUser = (guildId, userId) => new Promise((res, rej) => {
     db.run('INSERT OR IGNORE INTO guild_users (guildId, userId) VALUES (?, ?)', [guildId, userId], e => e ? rej(e) : res());
 });
 
+const getQuizStats = userId => new Promise((res, rej) => {
+    db.get('SELECT correct, wrong FROM quiz_stats WHERE userId = ?', [userId], (e, r) => {
+        if (e) rej(e);
+        else if (!r) res({ correct: 0, wrong: 0 });
+        else res(r);
+    });
+});
+
+const incQuizStat = (userId, column) => new Promise((res, rej) => {
+    db.run('INSERT OR IGNORE INTO quiz_stats (userId, correct, wrong) VALUES (?, 0, 0)', [userId], err => {
+        if (err) return rej(err);
+        db.run(`UPDATE quiz_stats SET ${column} = ${column} + 1 WHERE userId = ?`, [userId], e => e ? rej(e) : res());
+    });
+});
+
 // ---------------------------
 // Logic Helpers
 // ---------------------------
@@ -99,6 +115,88 @@ const isCloseEnough = (u, a) => {
     for (let i = 0; i < Math.min(u.length, a.length); i++) if (u[i] !== a[i]) diff++;
     diff += Math.abs(u.length - a.length);
     return diff <= (a.length > 6 ? 2 : 1);
+};
+
+const STOP_WORDS = new Set(['the','a','an','on','of','to','with','in','at','by','for','and','or','from','into','onto','over','under']);
+const SYN_MAP = {
+    "queenside": ["queen","side"],
+    "queen's": ["queen"],
+    "queens": ["queen"],
+    "kingside": ["king","side"],
+    "king's": ["king"],
+    "kings": ["king"],
+    "backrank": ["back","rank"],
+    "fianchetto": ["fianchetto"],
+    "enpassant": ["en","passant"],
+    "en": ["en"],
+    "passant": ["passant"],
+    "castle": ["castling"],
+    "o-o-o": ["castling","queen","side"],
+    "o-o": ["castling","king","side"],
+    "mate": ["checkmate"],
+    "promotion": ["promotion","promote"],
+    "promote": ["promotion"],
+    "battery": ["battery","double"],
+    "double": ["double"],
+    "forking": ["fork"],
+    "fork": ["fork"],
+    "skewer": ["skewer"],
+    "pin": ["pin"],
+    "zugzwang": ["zugzwang"],
+    "zwischenzug": ["zwischenzug","intermediate"],
+    "intermediate": ["zwischenzug"],
+    "gambit": ["gambit"],
+    "declined": ["declined"],
+    "accepted": ["accepted"],
+    "defense": ["defense"],
+    "attack": ["attack"],
+    "break": ["break"],
+    "pawn": ["pawn"],
+    "rank": ["rank"],
+    "file": ["file"],
+    "queen": ["queen"],
+    "king": ["king"],
+    "rook": ["rook"],
+    "bishop": ["bishop"],
+    "knight": ["knight"]
+};
+
+const canonTokens = (s) => {
+    if (!s) return new Set();
+    s = String(s).toLowerCase().replace(/[^a-z0-9\s\-']/g, ' ');
+    s = s.replace(/-/g, ' ');
+    s = s.replace(/'/g, '');
+    const raw = s.split(/\s+/).filter(Boolean);
+    let tokens = [];
+    for (const t of raw) {
+        if (STOP_WORDS.has(t)) continue;
+        if (SYN_MAP[t]) tokens.push(...SYN_MAP[t]);
+        else tokens.push(t);
+    }
+    const out = new Set(tokens.filter(x => !STOP_WORDS.has(x)));
+    return out;
+};
+
+const subsetMatch = (a, b) => {
+    for (const t of a) { if (!b.has(t)) return false; }
+    return true;
+};
+
+const isAnswerMatch = (input, q) => {
+    const inSet = canonTokens(input);
+    const ansSet = canonTokens(q.answer);
+    if (subsetMatch(ansSet, inSet)) return true;
+    if (Array.isArray(q.aliases)) {
+        for (const al of q.aliases) {
+            const alSet = canonTokens(al);
+            if (subsetMatch(alSet, inSet)) return true;
+        }
+    }
+    if (ansSet.size === 1) {
+        if (isCloseEnough(input, q.answer)) return true;
+        if (Array.isArray(q.aliases) && q.aliases.some(a => isCloseEnough(input, a))) return true;
+    }
+    return false;
 };
 
 // ---------------------------
@@ -425,8 +523,9 @@ client.once(Events.ClientReady, async () => {
             { name: 'balance', description: 'Check coins', options: [{ name: 'user', description: 'User to check', type: ApplicationCommandOptionType.User, required: false }] },
             { name: 'leaderboard', description: 'Top 10 players', options: [{ name: 'scope', description: 'Leaderboard scope', type: ApplicationCommandOptionType.String, required: false, choices: [{ name: 'Global', value: 'global' }, { name: 'Server', value: 'server' }] }] },
             { name: 'shop', description: 'View shop' },
-            { name: 'chessquiz', description: 'Get a question (1h 30m cooldown)' },
+            { name: 'chessquiz', description: 'Get a question (5m cooldown)' },
             { name: 'answer', description: 'Answer the quiz', options: [{ name: 'text', description: 'Your chess answer', type: ApplicationCommandOptionType.String, required: true }] },
+            { name: 'ration', description: 'Show your quiz stats' },
             { name: 'questions', description: 'Admin: View quiz questions', default_member_permissions: PermissionFlagsBits.Administrator.toString(), options: [{ name: 'page', description: 'Page number (1-15)', type: ApplicationCommandOptionType.Integer, required: false }] },
             { name: 'addmoney', description: 'Admin: Add coins', default_member_permissions: PermissionFlagsBits.Administrator.toString(), options: [{ name: 'user', description: 'User to give coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to add', type: ApplicationCommandOptionType.Integer, required: true }] },
             { name: 'removemoney', description: 'Admin: Remove coins', default_member_permissions: PermissionFlagsBits.Administrator.toString(), options: [{ name: 'user', description: 'User to remove coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to remove', type: ApplicationCommandOptionType.Integer, required: true }] }
@@ -482,7 +581,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     const ownedTxt = owned ? "Already Owned" : "Not Owned";
                     return { name: `♟️ ${s.name}`, value: `📝 Description: ${s.description}\n💰 Price: ${s.price} coins\n🎭 Role: ${roleMention}\n✅ Status: ${ownedTxt}`, inline: false };
                 });
-                const embed = new EmbedBuilder().setTitle("🛒 Server Shop").setDescription(`💰 Balance: ${newData.coins} coins`).addFields(fields).setColor(0x3498DB);
+                const embed = new EmbedBuilder().setTitle(`🛒 Server Shop • Balance: ${newData.coins} coins`).addFields(fields).setColor(0x3498DB);
                 const buttons = SHOP.map(s => {
                     const owned = newMember.roles.cache.has(s.roleId);
                     const label = owned ? `Owned: ${s.name}` : `Buy ${s.name} • ${s.price} Coins`;
@@ -515,8 +614,22 @@ client.on(Events.InteractionCreate, async interaction => {
 
     try {
         if (commandName === 'chessquiz') {
+            const active = await getActiveQuestion(user.id);
+            const timeLimitMs = 60 * 1000;
+            if (active) {
+                const elapsed = Date.now() - active.askedAt;
+                if (elapsed > timeLimitMs) {
+                    await incQuizStat(user.id, 'wrong');
+                    await clearActiveQuestion(user.id);
+                    await setCooldown(user.id);
+                    await addQuizToHistory(user.id, active.quizId);
+                } else {
+                    const remaining = Math.ceil((timeLimitMs - elapsed) / 1000);
+                    return interaction.editReply(`❗ Answer your current question first! Time left: ${remaining}s`);
+                }
+            }
             const row = await getCooldown(user.id);
-            const cooldownTime = 90 * 60 * 1000;
+            const cooldownTime = 5 * 60 * 1000;
             if (row && (Date.now() - row.lastUsed < cooldownTime)) {
                 const diff = cooldownTime - (Date.now() - row.lastUsed);
                 const h = Math.floor(diff / 3600000);
@@ -527,15 +640,13 @@ client.on(Events.InteractionCreate, async interaction => {
                     .setColor(0x95A5A6);
                 return interaction.editReply({ embeds: [embed] });
             }
-            if (await getActiveQuestion(user.id)) return interaction.editReply("❗ Answer your current question first!");
-
             const q = await getRandomQuizForUser(user.id);
             await setActiveQuestion(user.id, q.id);
             return interaction.editReply({
                 embeds: [
                     new EmbedBuilder()
                         .setTitle("🧠 Chess Quiz")
-                        .setDescription(`❓ ${q.question}`)
+                        .setDescription(`❓ ${q.question}\n⏱️ You have 1m. Use /answer`)
                         .setColor(0x00FF00)
                         .setFooter({ text: `Reward: ${q.reward} coins` })
                 ]
@@ -548,13 +659,16 @@ client.on(Events.InteractionCreate, async interaction => {
             
             const q = QUIZ_POOL.find(i => i.id === active.quizId);
             const input = options.getString('text');
-            const correct = isCloseEnough(input, q.answer) || q.aliases?.some(a => isCloseEnough(input, a));
+            const timeLimitMs = 60 * 1000;
+            const timedOut = (Date.now() - active.askedAt) > timeLimitMs;
+            const correct = isAnswerMatch(input, q);
             
             await clearActiveQuestion(user.id);
             await setCooldown(user.id);
             await addQuizToHistory(user.id, q.id);
 
-            if (correct) {
+            if (!timedOut && correct) {
+                await incQuizStat(user.id, 'correct');
                 await addUserCoins(user.id, q.reward);
                 const embed = new EmbedBuilder()
                     .setTitle("✅ Correct Answer")
@@ -562,10 +676,16 @@ client.on(Events.InteractionCreate, async interaction => {
                     .setColor(0x2ECC71);
                 return interaction.editReply({ embeds: [embed] });
             }
-            const embed = new EmbedBuilder()
-                .setTitle("❌ Wrong Answer")
-                .setDescription(`Correct answer: **${q.answer}**`)
-                .setColor(0xE74C3C);
+            await incQuizStat(user.id, 'wrong');
+            const embed = timedOut
+                ? new EmbedBuilder()
+                    .setTitle("⏱️ Time's Up")
+                    .setDescription(`Correct answer: **${q.answer}**`)
+                    .setColor(0xE67E22)
+                : new EmbedBuilder()
+                    .setTitle("❌ Wrong Answer")
+                    .setDescription(`Correct answer: **${q.answer}**`)
+                    .setColor(0xE74C3C);
             return interaction.editReply({ embeds: [embed] });
         }
 
@@ -631,6 +751,15 @@ client.on(Events.InteractionCreate, async interaction => {
             });
         }
 
+        if (commandName === 'ration') {
+            const stats = await getQuizStats(user.id);
+            const embed = new EmbedBuilder()
+                .setTitle("📊 Quiz Stats")
+                .setDescription(`✅ Correct: ${stats.correct}\n❌ Wrong: ${stats.wrong}`)
+                .setColor(0x9B59B6);
+            return interaction.editReply({ embeds: [embed] });
+        }
+
         if (commandName === 'shop') {
             const member = await guild.members.fetch(user.id);
             const data = await getUserData(user.id);
@@ -645,8 +774,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 };
             });
             const embed = new EmbedBuilder()
-                .setTitle("🛒 Server Shop")
-                .setDescription(`💰 Balance: ${data.coins} coins`)
+                .setTitle(`🛒 Server Shop • Balance: ${data.coins} coins`)
                 .addFields(fields)
                 .setColor(0x3498DB);
             const buttons = SHOP.map(s => {
@@ -692,3 +820,4 @@ client.on(Events.InteractionCreate, async interaction => {
 });
 
 client.login(DISCORD_TOKEN);
+
