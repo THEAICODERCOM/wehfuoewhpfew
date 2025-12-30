@@ -930,10 +930,30 @@ async function getRandomQuizForUser(userId) {
 // Interaction Handler
 // ---------------------------
 client.on(Events.InteractionCreate, async interaction => {
-    if (interaction.isButton()) {
-        const { customId, user, guild } = interaction;
-        await interaction.deferUpdate().catch(() => {});
-        try {
+    // 1. Immediate Deferral to prevent "Application didn't respond"
+    try {
+        if (interaction.isButton()) {
+            await interaction.deferUpdate().catch(() => {});
+        } else if (interaction.isChatInputCommand()) {
+            await interaction.deferReply().catch(() => {});
+        } else {
+            return;
+        }
+    } catch (e) {
+        console.error("Deferral Error:", e);
+        return;
+    }
+
+    const { user, guild } = interaction;
+
+    // 2. Background Tasks (Non-blocking)
+    if (guild) {
+        upsertGuildUser(guild.id, user.id).catch(() => {});
+    }
+
+    try {
+        if (interaction.isButton()) {
+            const { customId } = interaction;
             if (customId === 'shop_close') {
                 await interaction.editReply({ components: [] });
                 return;
@@ -987,272 +1007,266 @@ client.on(Events.InteractionCreate, async interaction => {
                 await interaction.followUp({ content: `You successfully bought the ${item.name} role!`, ephemeral: true });
                 return;
             }
-            await interaction.followUp({ content: "This button action is no longer valid.", ephemeral: true });
-        } catch (err) {
-            console.error("Button Interaction Error:", err);
-            await interaction.followUp({ content: "An error occurred while processing your action.", ephemeral: true }).catch(() => {});
+            return;
         }
-        return;
-    }
-    if (!interaction.isChatInputCommand()) return;
-    await interaction.deferReply().catch(() => {});
 
-    const { commandName, user, options, guild } = interaction;
+        if (interaction.isChatInputCommand()) {
+            const { commandName, options } = interaction;
 
-    if (guild) {
-        try { await upsertGuildUser(guild.id, user.id); } catch {}
-    }
-
-    try {
-        if (commandName === 'chessquiz') {
-            const active = await getActiveQuestion(user.id);
-            const timeLimitMs = 60 * 1000;
-            if (active) {
-                const elapsed = Date.now() - active.askedAt;
-                if (elapsed > timeLimitMs) {
-                    await incQuizStat(user.id, 'wrong');
-                    await clearActiveQuestion(user.id);
-                    await setCooldown(user.id);
-                    await addQuizToHistory(user.id, active.quizId);
-                } else {
-                    const remaining = Math.ceil((timeLimitMs - elapsed) / 1000);
-                    return interaction.editReply(`❗ Answer your current question first! Time left: ${remaining}s`);
+            if (commandName === 'chessquiz') {
+                const active = await getActiveQuestion(user.id);
+                const timeLimitMs = 60 * 1000;
+                if (active) {
+                    const elapsed = Date.now() - active.askedAt;
+                    if (elapsed > timeLimitMs) {
+                        await incQuizStat(user.id, 'wrong');
+                        await clearActiveQuestion(user.id);
+                        await setCooldown(user.id);
+                        await addQuizToHistory(user.id, active.quizId);
+                    } else {
+                        const remaining = Math.ceil((timeLimitMs - elapsed) / 1000);
+                        return interaction.editReply(`❗ Answer your current question first! Time left: ${remaining}s`);
+                    }
                 }
+                const row = await getCooldown(user.id);
+                const cooldownTime = 5 * 60 * 1000;
+                if (row && (Date.now() - row.lastUsed < cooldownTime)) {
+                    const diff = cooldownTime - (Date.now() - row.lastUsed);
+                    const h = Math.floor(diff / 3600000);
+                    const m = Math.floor((diff % 3600000) / 60000);
+                    const embed = new EmbedBuilder()
+                        .setTitle("⏳ Cooldown Active")
+                        .setDescription(`Try again in **${h}h ${m}m**.`)
+                        .setColor(0x95A5A6);
+                    return interaction.editReply({ embeds: [embed] });
+                }
+                const q = await getRandomQuizForUser(user.id);
+                await setActiveQuestion(user.id, q.id);
+                return interaction.editReply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setTitle("🧠 Chess Quiz")
+                            .setDescription(`❓ ${q.question}\n⏱️ You have 60s. Use /answer`)
+                            .setColor(0x00FF00)
+                            .setFooter({ text: `Reward: ${q.reward} coins` })
+                    ]
+                });
             }
-            const row = await getCooldown(user.id);
-            const cooldownTime = 5 * 60 * 1000;
-            if (row && (Date.now() - row.lastUsed < cooldownTime)) {
-                const diff = cooldownTime - (Date.now() - row.lastUsed);
-                const h = Math.floor(diff / 3600000);
-                const m = Math.floor((diff % 3600000) / 60000);
+
+            if (commandName === 'answer') {
+                const active = await getActiveQuestion(user.id);
+                if (!active) return interaction.editReply("❌ No active quiz. Use `/chessquiz`.");
+                
+                const q = QUIZ_POOL.find(i => i.id === active.quizId);
+                const input = options.getString('text');
+                const timeLimitMs = 60 * 1000;
+                const timedOut = (Date.now() - active.askedAt) > timeLimitMs;
+                const correct = isAnswerMatch(input, q);
+                
+                await clearActiveQuestion(user.id);
+                await setCooldown(user.id);
+                await addQuizToHistory(user.id, q.id);
+
+                if (!timedOut && correct) {
+                    await incQuizStat(user.id, 'correct');
+                    await addUserCoins(user.id, q.reward);
+                    const embed = new EmbedBuilder()
+                        .setTitle("✅ Correct Answer")
+                        .setDescription(`You earned **${q.reward}** coins.\nAnswer: ${q.answer}`)
+                        .setColor(0x2ECC71);
+                    return interaction.editReply({ embeds: [embed] });
+                }
+                await incQuizStat(user.id, 'wrong');
+                const embed = timedOut
+                    ? new EmbedBuilder()
+                        .setTitle("⏱️ Time's Up")
+                        .setDescription(`Correct answer: **${q.answer}**`)
+                        .setColor(0xE67E22)
+                    : new EmbedBuilder()
+                        .setTitle("❌ Wrong Answer")
+                        .setDescription(`Correct answer: **${q.answer}**`)
+                        .setColor(0xE74C3C);
+                return interaction.editReply({ embeds: [embed] });
+            }
+
+            if (commandName === 'daily') {
+                const data = await getUserData(user.id);
+                if (Date.now() - data.lastDaily < 86400000) return interaction.editReply("⏳ Already claimed today!");
+                await addUserCoins(user.id, 25);
+                db.run('UPDATE users SET lastDaily = ? WHERE userId = ?', [Date.now(), user.id]);
+                const embed = new EmbedBuilder().setTitle("🎁 Daily Reward").setDescription("You received 25 coins.").setColor(0x00FF00);
+                return interaction.editReply({ embeds: [embed] });
+            }
+
+            if (commandName === 'balance') {
+                const target = options.getUser('user') || user;
+                const data = await getUserData(target.id);
+                const embed = new EmbedBuilder().setTitle("💰 Balance").setDescription(`User: ${target.username}\nCoins: ${data.coins}`).setColor(0x3498DB);
+                return interaction.editReply({ embeds: [embed] });
+            }
+
+            if (commandName === 'leaderboard') {
+                const scope = options.getString('scope') || 'server';
+                let rows;
+                if (scope === 'server' && guild) {
+                    rows = await dbAll(
+                        'SELECT u.userId, u.coins FROM users u INNER JOIN guild_users g ON g.userId = u.userId WHERE g.guildId = ? ORDER BY u.coins DESC LIMIT 10',
+                        [guild.id]
+                    );
+                } else {
+                    rows = await dbAll('SELECT userId, coins FROM users ORDER BY coins DESC LIMIT 10');
+                }
+                const medals = ['🥇','🥈','🥉'];
+                const txt = rows.map((r, i) => `${medals[i] || `**${i+1}.**`} <@${r.userId}> • ${r.coins} coins`).join('\n') || "Empty.";
+                const title = scope === 'server' ? "🏆 Server Leaderboard" : " Global Leaderboard";
                 const embed = new EmbedBuilder()
-                    .setTitle("⏳ Cooldown Active")
-                    .setDescription(`Try again in **${h}h ${m}m**.`)
-                    .setColor(0x95A5A6);
+                    .setTitle(title)
+                    .setDescription(txt)
+                    .setColor(0xFFD700)
+                    .setFooter({ text: "Top 10 players" });
                 return interaction.editReply({ embeds: [embed] });
             }
-            const q = await getRandomQuizForUser(user.id);
-            await setActiveQuestion(user.id, q.id);
-            return interaction.editReply({
-                embeds: [
-                    new EmbedBuilder()
-                        .setTitle("🧠 Chess Quiz")
-                        .setDescription(`❓ ${q.question}\n⏱️ You have 60s. Use /answer`)
-                        .setColor(0x00FF00)
-                        .setFooter({ text: `Reward: ${q.reward} coins` })
-                ]
-            });
-        }
 
-        if (commandName === 'answer') {
-            const active = await getActiveQuestion(user.id);
-            if (!active) return interaction.editReply("❌ No active quiz. Use `/chessquiz`.");
-            
-            const q = QUIZ_POOL.find(i => i.id === active.quizId);
-            const input = options.getString('text');
-            const timeLimitMs = 60 * 1000;
-            const timedOut = (Date.now() - active.askedAt) > timeLimitMs;
-            const correct = isAnswerMatch(input, q);
-            
-            await clearActiveQuestion(user.id);
-            await setCooldown(user.id);
-            await addQuizToHistory(user.id, q.id);
-
-            if (!timedOut && correct) {
-                await incQuizStat(user.id, 'correct');
-                await addUserCoins(user.id, q.reward);
-                const embed = new EmbedBuilder()
-                    .setTitle("✅ Correct Answer")
-                    .setDescription(`You earned **${q.reward}** coins.\nAnswer: ${q.answer}`)
-                    .setColor(0x2ECC71);
-                return interaction.editReply({ embeds: [embed] });
-            }
-            await incQuizStat(user.id, 'wrong');
-            const embed = timedOut
-                ? new EmbedBuilder()
-                    .setTitle("⏱️ Time's Up")
-                    .setDescription(`Correct answer: **${q.answer}**`)
-                    .setColor(0xE67E22)
-                : new EmbedBuilder()
-                    .setTitle("❌ Wrong Answer")
-                    .setDescription(`Correct answer: **${q.answer}**`)
-                    .setColor(0xE74C3C);
-            return interaction.editReply({ embeds: [embed] });
-        }
-
-        if (commandName === 'daily') {
-            const data = await getUserData(user.id);
-            if (Date.now() - data.lastDaily < 86400000) return interaction.editReply("⏳ Already claimed today!");
-            await addUserCoins(user.id, 25);
-            db.run('UPDATE users SET lastDaily = ? WHERE userId = ?', [Date.now(), user.id]);
-            const embed = new EmbedBuilder().setTitle("🎁 Daily Reward").setDescription("You received 25 coins.").setColor(0x00FF00);
-            return interaction.editReply({ embeds: [embed] });
-        }
-
-        if (commandName === 'balance') {
-            const target = options.getUser('user') || user;
-            const data = await getUserData(target.id);
-            const embed = new EmbedBuilder().setTitle("💰 Balance").setDescription(`User: ${target.username}\nCoins: ${data.coins}`).setColor(0x3498DB);
-            return interaction.editReply({ embeds: [embed] });
-        }
-
-        if (commandName === 'leaderboard') {
-            const scope = options.getString('scope') || 'server';
-            let rows;
-            if (scope === 'server' && guild) {
-                rows = await dbAll(
-                    'SELECT u.userId, u.coins FROM users u INNER JOIN guild_users g ON g.userId = u.userId WHERE g.guildId = ? ORDER BY u.coins DESC LIMIT 10',
-                    [guild.id]
-                );
-            } else {
-                rows = await dbAll('SELECT userId, coins FROM users ORDER BY coins DESC LIMIT 10');
-            }
-            const medals = ['🥇','🥈','🥉'];
-            const txt = rows.map((r, i) => `${medals[i] || `**${i+1}.**`} <@${r.userId}> • ${r.coins} coins`).join('\n') || "Empty.";
-            const title = scope === 'server' ? "🏆 Server Leaderboard" : "� Global Leaderboard";
-            const embed = new EmbedBuilder()
-                .setTitle(title)
-                .setDescription(txt)
-                .setColor(0xFFD700)
-                .setFooter({ text: "Top 10 players" });
-            return interaction.editReply({ embeds: [embed] });
-        }
-
-        if (commandName === 'guesstheplayer') {
-            if (!PLAYERS.length) return interaction.editReply("❌ Player list is unavailable.");
-            const row = await getGuessCooldown(user.id);
-            const cooldownTime = 10 * 60 * 1000;
-            if (row && (Date.now() - row.lastUsed < cooldownTime)) {
-                const diff = cooldownTime - (Date.now() - row.lastUsed);
-                const h = Math.floor(diff / 3600000);
-                const m = Math.floor((diff % 3600000) / 60000);
-                const embed = new EmbedBuilder().setTitle("⏳ Cooldown Active").setDescription(`Try again in **${h}h ${m}m**.`).setColor(0x95A5A6);
-                return interaction.editReply({ embeds: [embed] });
-            }
-            const active = await getGuessActive(user.id);
-            if (active) {
-                const entry = PLAYERS.find(p => p.name === active.playerName);
-                const idx = Math.max(1, active.hintIndex);
-                const shown = entry ? entry.hints.slice(0, idx).map((h, i) => `Hint ${i+1}: ${h}`).join('\n') : "No hints available.";
-                const embed = new EmbedBuilder().setTitle("🕵️ Guess the Player").setDescription(shown).setColor(0x8E44AD).setFooter({ text: "One guess only • Use /guess to answer" });
+            if (commandName === 'guesstheplayer') {
+                if (!PLAYERS.length) return interaction.editReply("❌ Player list is unavailable.");
+                const row = await getGuessCooldown(user.id);
+                const cooldownTime = 10 * 60 * 1000;
+                if (row && (Date.now() - row.lastUsed < cooldownTime)) {
+                    const diff = cooldownTime - (Date.now() - row.lastUsed);
+                    const h = Math.floor(diff / 3600000);
+                    const m = Math.floor((diff % 3600000) / 60000);
+                    const embed = new EmbedBuilder().setTitle("⏳ Cooldown Active").setDescription(`Try again in **${h}h ${m}m**.`).setColor(0x95A5A6);
+                    return interaction.editReply({ embeds: [embed] });
+                }
+                const active = await getGuessActive(user.id);
+                if (active) {
+                    const entry = PLAYERS.find(p => p.name === active.playerName);
+                    const idx = Math.max(1, active.hintIndex);
+                    const shown = entry ? entry.hints.slice(0, idx).map((h, i) => `Hint ${i+1}: ${h}`).join('\n') : "No hints available.";
+                    const embed = new EmbedBuilder().setTitle("🕵️ Guess the Player").setDescription(shown).setColor(0x8E44AD).setFooter({ text: "One guess only • Use /guess to answer" });
+                    const rowComp = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_next').setLabel('Next Hint').setStyle(ButtonStyle.Primary));
+                    return interaction.editReply({ embeds: [embed], components: [rowComp] });
+                }
+                const entry = PLAYERS[Math.floor(Math.random() * PLAYERS.length)];
+                await setGuessActive(user.id, entry.name);
+                const first = entry.hints[0] || "No hint.";
+                const embed = new EmbedBuilder().setTitle("🕵️ Guess the Player").setDescription(`Hint 1: ${first}`).setColor(0x8E44AD).setFooter({ text: "One guess only • Use /guess to answer" });
                 const rowComp = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_next').setLabel('Next Hint').setStyle(ButtonStyle.Primary));
                 return interaction.editReply({ embeds: [embed], components: [rowComp] });
             }
-            const entry = PLAYERS[Math.floor(Math.random() * PLAYERS.length)];
-            await setGuessActive(user.id, entry.name);
-            const first = entry.hints[0] || "No hint.";
-            const embed = new EmbedBuilder().setTitle("🕵️ Guess the Player").setDescription(`Hint 1: ${first}`).setColor(0x8E44AD).setFooter({ text: "One guess only • Use /guess to answer" });
-            const rowComp = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_next').setLabel('Next Hint').setStyle(ButtonStyle.Primary));
-            return interaction.editReply({ embeds: [embed], components: [rowComp] });
-        }
 
-        if (commandName === 'guess') {
-            const active = await getGuessActive(user.id);
-            if (!active) return interaction.editReply("❌ No active player. Use `/guesstheplayer`.");
-            const nameInput = options.getString('name');
-            const correct = isNameMatch(nameInput, active.playerName);
-            if (correct) {
+            if (commandName === 'guess') {
+                const active = await getGuessActive(user.id);
+                if (!active) return interaction.editReply("❌ No active player. Use `/guesstheplayer`.");
+                const nameInput = options.getString('name');
+                const correct = isNameMatch(nameInput, active.playerName);
+                if (correct) {
+                    await clearGuessActive(user.id);
+                    await setGuessCooldown(user.id);
+                    await addUserCoins(user.id, 10);
+                    const embed = new EmbedBuilder().setTitle("✅ Correct Player").setDescription(`You earned **10** coins.\nAnswer: ${active.playerName}`).setColor(0x2ECC71);
+                    return interaction.editReply({ embeds: [embed], components: [] });
+                }
                 await clearGuessActive(user.id);
                 await setGuessCooldown(user.id);
-                await addUserCoins(user.id, 10);
-                const embed = new EmbedBuilder().setTitle("✅ Correct Player").setDescription(`You earned **10** coins.\nAnswer: ${active.playerName}`).setColor(0x2ECC71);
+                const embed = new EmbedBuilder().setTitle("❌ Wrong Player").setDescription("One guess only. Try again after cooldown.").setColor(0xE74C3C);
                 return interaction.editReply({ embeds: [embed], components: [] });
             }
-            await clearGuessActive(user.id);
-            await setGuessCooldown(user.id);
-            const embed = new EmbedBuilder().setTitle("❌ Wrong Player").setDescription("One guess only. Try again after cooldown.").setColor(0xE74C3C);
-            return interaction.editReply({ embeds: [embed], components: [] });
-        }
-        if (commandName === 'questions') {
-            const isAdmin = guild && interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
-            if (!isAdmin) return interaction.editReply("❌ Admins only.");
-            const pageSize = 20;
-            const total = QUIZ_POOL.length;
-            const totalPages = Math.ceil(total / pageSize);
-            let page = options.getInteger('page') || 1;
-            if (page < 1) page = 1;
-            if (page > totalPages) page = totalPages;
-            const start = (page - 1) * pageSize;
-            const slice = QUIZ_POOL.slice(start, start + pageSize);
-            const lines = slice.map(q => `#${q.id}: ❓ ${q.question}`);
-            const txt2 = lines.join('\n') || "Empty.";
-            return interaction.editReply({
-                embeds: [
-                    new EmbedBuilder()
-                        .setTitle(`📚 Questions (${page}/${totalPages})`)
-                        .setDescription(txt2)
-                        .setColor(0x3498DB)
-                        .setFooter({ text: "Admin view" })
-                ]
-            });
-        }
-
-        if (commandName === 'ration') {
-            const stats = await getQuizStats(user.id);
-            const embed = new EmbedBuilder()
-                .setTitle("📊 Quiz Stats")
-                .setDescription(`✅ Correct: ${stats.correct}\n❌ Wrong: ${stats.wrong}`)
-                .setColor(0x9B59B6);
-            return interaction.editReply({ embeds: [embed] });
-        }
-
-        if (commandName === 'shop') {
-            const member = await guild.members.fetch(user.id);
-            const data = await getUserData(user.id);
-            const fields = SHOP.map(s => {
-                const owned = member.roles.cache.has(s.roleId);
-                const roleMention = `<@&${s.roleId}>`;
-                const ownedTxt = owned ? "Already Owned" : "Not Owned";
-                return {
-                    name: `♟️ ${s.name}`,
-                    value: `📝 Description: ${s.description}\n💰 Price: ${s.price} coins\n🎭 Role: ${roleMention}\n✅ Status: ${ownedTxt}`,
-                    inline: false
-                };
-            });
-            const embed = new EmbedBuilder()
-                .setTitle(`🛒 Server Shop • Balance: ${data.coins} coins`)
-                .addFields(fields)
-                .setColor(0x3498DB);
-            const buttons = SHOP.map(s => {
-                const owned = member.roles.cache.has(s.roleId);
-                const label = owned ? `Owned: ${s.name}` : `Buy ${s.name} • ${s.price} Coins`;
-                return new ButtonBuilder()
-                    .setCustomId(`shop_buy:${s.roleId}`)
-                    .setLabel(label)
-                    .setEmoji('🛒')
-                    .setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Primary)
-                    .setDisabled(owned);
-            });
-            const rows = [];
-            for (let i = 0; i < buttons.length; i += 5) {
-                rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+            if (commandName === 'questions') {
+                const isAdmin = guild && interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+                if (!isAdmin) return interaction.editReply("❌ Admins only.");
+                const pageSize = 20;
+                const total = QUIZ_POOL.length;
+                const totalPages = Math.ceil(total / pageSize);
+                let page = options.getInteger('page') || 1;
+                if (page < 1) page = 1;
+                if (page > totalPages) page = totalPages;
+                const start = (page - 1) * pageSize;
+                const slice = QUIZ_POOL.slice(start, start + pageSize);
+                const lines = slice.map(q => `#${q.id}: ❓ ${q.question}`);
+                const txt2 = lines.join('\n') || "Empty.";
+                return interaction.editReply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setTitle(`📚 Questions (${page}/${totalPages})`)
+                            .setDescription(txt2)
+                            .setColor(0x3498DB)
+                            .setFooter({ text: "Admin view" })
+                    ]
+                });
             }
-            rows.push(new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('shop_close').setLabel('Close Shop').setEmoji('🧹').setStyle(ButtonStyle.Danger)
-            ));
-            return interaction.editReply({ embeds: [embed], components: rows });
-        }
 
-        /* buy command removed */
+            if (commandName === 'ration') {
+                const stats = await getQuizStats(user.id);
+                const embed = new EmbedBuilder()
+                    .setTitle("📊 Quiz Stats")
+                    .setDescription(`✅ Correct: ${stats.correct}\n❌ Wrong: ${stats.wrong}`)
+                    .setColor(0x9B59B6);
+                return interaction.editReply({ embeds: [embed] });
+            }
 
-        if (commandName === 'addmoney') {
-            const target = options.getUser('user');
-            const amount = options.getInteger('amount');
-            await addUserCoins(target.id, amount);
-            return interaction.editReply(`✅ Added **${amount}** coins to <@${target.id}>.`);
-        }
+            if (commandName === 'shop') {
+                const member = await guild.members.fetch(user.id);
+                const data = await getUserData(user.id);
+                const fields = SHOP.map(s => {
+                    const owned = member.roles.cache.has(s.roleId);
+                    const roleMention = `<@&${s.roleId}>`;
+                    const ownedTxt = owned ? "Already Owned" : "Not Owned";
+                    return {
+                        name: `♟️ ${s.name}`,
+                        value: `📝 Description: ${s.description}\n💰 Price: ${s.price} coins\n🎭 Role: ${roleMention}\n✅ Status: ${ownedTxt}`,
+                        inline: false
+                    };
+                });
+                const embed = new EmbedBuilder()
+                    .setTitle(`🛒 Server Shop • Balance: ${data.coins} coins`)
+                    .addFields(fields)
+                    .setColor(0x3498DB);
+                const buttons = SHOP.map(s => {
+                    const owned = member.roles.cache.has(s.roleId);
+                    const label = owned ? `Owned: ${s.name}` : `Buy ${s.name} • ${s.price} Coins`;
+                    return new ButtonBuilder()
+                        .setCustomId(`shop_buy:${s.roleId}`)
+                        .setLabel(label)
+                        .setEmoji('🛒')
+                        .setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Primary)
+                        .setDisabled(owned);
+                });
+                const rows = [];
+                for (let i = 0; i < buttons.length; i += 5) {
+                    rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+                }
+                rows.push(new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('shop_close').setLabel('Close Shop').setEmoji('🧹').setStyle(ButtonStyle.Danger)
+                ));
+                return interaction.editReply({ embeds: [embed], components: rows });
+            }
 
-        if (commandName === 'removemoney') {
-            const target = options.getUser('user');
-            const amount = options.getInteger('amount');
-            await addUserCoins(target.id, -amount);
-            return interaction.editReply(`✅ Removed **${amount}** coins from <@${target.id}>.`);
+            if (commandName === 'addmoney') {
+                const target = options.getUser('user');
+                const amount = options.getInteger('amount');
+                await addUserCoins(target.id, amount);
+                return interaction.editReply(`✅ Added **${amount}** coins to <@${target.id}>.`);
+            }
+
+            if (commandName === 'removemoney') {
+                const target = options.getUser('user');
+                const amount = options.getInteger('amount');
+                await addUserCoins(target.id, -amount);
+                return interaction.editReply(`✅ Removed **${amount}** coins from <@${target.id}>.`);
+            }
         }
 
     } catch (err) {
         console.error("Interaction Error:", err);
-        await interaction.editReply("⚠️ Error occurred while processing that command.").catch(() => {});
+        try {
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply("⚠️ Error occurred while processing that command.").catch(() => {});
+            } else {
+                await interaction.reply({ content: "⚠️ Error occurred while processing that command.", ephemeral: true }).catch(() => {});
+            }
+        } catch (e) {}
     }
 });
-
 client.login(DISCORD_TOKEN);
+
