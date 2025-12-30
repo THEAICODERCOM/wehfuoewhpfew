@@ -30,6 +30,8 @@ db.serialize(() => {
     db.run('CREATE TABLE IF NOT EXISTS quiz_history (userId TEXT PRIMARY KEY, askedIds TEXT NOT NULL)');
     db.run('CREATE TABLE IF NOT EXISTS guild_users (guildId TEXT NOT NULL, userId TEXT NOT NULL, PRIMARY KEY (guildId, userId))');
     db.run('CREATE TABLE IF NOT EXISTS quiz_stats (userId TEXT PRIMARY KEY, correct INTEGER NOT NULL DEFAULT 0, wrong INTEGER NOT NULL DEFAULT 0)');
+    db.run('CREATE TABLE IF NOT EXISTS guess_active (userId TEXT PRIMARY KEY, playerName TEXT NOT NULL, askedAt INTEGER NOT NULL, hintIndex INTEGER NOT NULL DEFAULT 1)');
+    db.run('CREATE TABLE IF NOT EXISTS guess_cooldown (userId TEXT PRIMARY KEY, lastUsed INTEGER NOT NULL)');
 });
 
 // ---------------------------
@@ -102,6 +104,17 @@ const incQuizStat = (userId, column) => new Promise((res, rej) => {
         db.run(`UPDATE quiz_stats SET ${column} = ${column} + 1 WHERE userId = ?`, [userId], e => e ? rej(e) : res());
     });
 });
+
+const getGuessActive = userId => new Promise((res, rej) => {
+    db.get('SELECT playerName, askedAt, hintIndex FROM guess_active WHERE userId = ?', [userId], (e, r) => e ? rej(e) : res(r || null));
+});
+const setGuessActive = (userId, playerName) => new Promise((res, rej) => {
+    db.run('INSERT INTO guess_active (userId, playerName, askedAt, hintIndex) VALUES (?, ?, ?, 1) ON CONFLICT(userId) DO UPDATE SET playerName=excluded.playerName, askedAt=excluded.askedAt, hintIndex=excluded.hintIndex', [userId, playerName, Date.now()], e => e ? rej(e) : res());
+});
+const setGuessHintIndex = (userId, hintIndex) => new Promise((res, rej) => db.run('UPDATE guess_active SET hintIndex = ? WHERE userId = ?', [hintIndex, userId], e => e ? rej(e) : res()));
+const clearGuessActive = userId => new Promise((res, rej) => db.run('DELETE FROM guess_active WHERE userId = ?', [userId], e => e ? rej(e) : res()));
+const getGuessCooldown = userId => new Promise((res, rej) => db.get('SELECT lastUsed FROM guess_cooldown WHERE userId = ?', [userId], (e, r) => e ? rej(e) : res(r || null)));
+const setGuessCooldown = userId => new Promise((res, rej) => db.run('INSERT INTO guess_cooldown (userId, lastUsed) VALUES (?, ?) ON CONFLICT(userId) DO UPDATE SET lastUsed=excluded.lastUsed', [userId, Date.now()], e => e ? rej(e) : res()));
 
 // ---------------------------
 // Logic Helpers
@@ -197,6 +210,19 @@ const isAnswerMatch = (input, q) => {
         if (Array.isArray(q.aliases) && q.aliases.some(a => isCloseEnough(input, a))) return true;
     }
     return false;
+};
+
+const nameTokens = s => {
+    s = String(s || "").toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    s = s.replace(/[^a-z0-9\s]/g, ' ');
+    const parts = s.split(/\s+/).filter(Boolean).filter(w => !STOP_WORDS.has(w));
+    return new Set(parts);
+};
+const isNameMatch = (input, name) => {
+    const a = nameTokens(name);
+    const b = nameTokens(input);
+    for (const t of a) { if (!b.has(t)) return false; }
+    return true;
 };
 
 // ---------------------------
@@ -513,6 +539,35 @@ const SHOP = [
     { name: 'Chess GOAT', description: 'Top-tier recognition across the server.', price: 1000, roleId: '1455250931473191148' }
 ];
 
+let PLAYERS = [];
+const loadPlayers = () => {
+    try {
+        const txt = fs.readFileSync('/Users/ali_sadik/Documents/trae_projects/Chess-Bot/Chess player', 'utf8');
+        const lines = txt.split(/\r?\n/);
+        const entries = [];
+        let current = null;
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const m = line.match(/^(\d+)\.\s+(.*)$/);
+            if (m) {
+                const num = parseInt(m[1], 10);
+                const name = m[2].trim();
+                if (current) entries.push(current);
+                current = { num, name, hints: [] };
+                continue;
+            }
+            if (current) current.hints.push(line);
+        }
+        if (current) entries.push(current);
+        const filtered = entries.filter(e => e.num !== 50);
+        PLAYERS = filtered.map(e => ({ name: e.name, hints: e.hints.slice(0, 5) }));
+    } catch {
+        PLAYERS = [];
+    }
+};
+loadPlayers();
+
 // ---------------------------
 // Register commands
 // ---------------------------
@@ -525,6 +580,8 @@ client.once(Events.ClientReady, async () => {
             { name: 'shop', description: 'View shop' },
             { name: 'chessquiz', description: 'Get a question (5m cooldown)' },
             { name: 'answer', description: 'Answer the quiz', options: [{ name: 'text', description: 'Your chess answer', type: ApplicationCommandOptionType.String, required: true }] },
+            { name: 'guesstheplayer', description: 'Start Guess the Player (10m cooldown)' },
+            { name: 'guess', description: 'Submit your player guess', options: [{ name: 'name', description: 'Player name', type: ApplicationCommandOptionType.String, required: true }] },
             { name: 'ration', description: 'Show your quiz stats' },
             { name: 'questions', description: 'Admin: View quiz questions', default_member_permissions: PermissionFlagsBits.Administrator.toString(), options: [{ name: 'page', description: 'Page number (1-15)', type: ApplicationCommandOptionType.Integer, required: false }] },
             { name: 'addmoney', description: 'Admin: Add coins', default_member_permissions: PermissionFlagsBits.Administrator.toString(), options: [{ name: 'user', description: 'User to give coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to add', type: ApplicationCommandOptionType.Integer, required: true }] },
@@ -559,6 +616,20 @@ client.on(Events.InteractionCreate, async interaction => {
         try {
             if (customId === 'shop_close') {
                 await interaction.editReply({ components: [] });
+                return;
+            }
+            if (customId === 'guess_next') {
+                const active = await getGuessActive(user.id);
+                if (!active) { await interaction.followUp({ content: "No active Guess the Player.", ephemeral: true }); return; }
+                const entry = PLAYERS.find(p => p.name === active.playerName);
+                if (!entry) { await interaction.followUp({ content: "This guess is no longer valid.", ephemeral: true }); return; }
+                let idx = active.hintIndex + 1;
+                if (idx > entry.hints.length) idx = entry.hints.length;
+                await setGuessHintIndex(user.id, idx);
+                const shown = entry.hints.slice(0, idx).map((h, i) => `Hint ${i+1}: ${h}`).join('\n');
+                const embed = new EmbedBuilder().setTitle("🕵️ Guess the Player").setDescription(shown).setColor(0x8E44AD);
+                const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_next').setLabel(idx >= entry.hints.length ? 'No more hints' : 'Next Hint').setStyle(idx >= entry.hints.length ? ButtonStyle.Secondary : ButtonStyle.Primary).setDisabled(idx >= entry.hints.length));
+                await interaction.editReply({ embeds: [embed], components: [row] });
                 return;
             }
             if (customId.startsWith('shop_buy:')) {
@@ -646,7 +717,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 embeds: [
                     new EmbedBuilder()
                         .setTitle("🧠 Chess Quiz")
-                        .setDescription(`❓ ${q.question}\n⏱️ You have 1m. Use /answer`)
+                        .setDescription(`❓ ${q.question}\n⏱️ You have 60s. Use /answer`)
                         .setColor(0x00FF00)
                         .setFooter({ text: `Reward: ${q.reward} coins` })
                 ]
@@ -727,6 +798,51 @@ client.on(Events.InteractionCreate, async interaction => {
             return interaction.editReply({ embeds: [embed] });
         }
 
+        if (commandName === 'guesstheplayer') {
+            if (!PLAYERS.length) return interaction.editReply("❌ Player list is unavailable.");
+            const row = await getGuessCooldown(user.id);
+            const cooldownTime = 10 * 60 * 1000;
+            if (row && (Date.now() - row.lastUsed < cooldownTime)) {
+                const diff = cooldownTime - (Date.now() - row.lastUsed);
+                const h = Math.floor(diff / 3600000);
+                const m = Math.floor((diff % 3600000) / 60000);
+                const embed = new EmbedBuilder().setTitle("⏳ Cooldown Active").setDescription(`Try again in **${h}h ${m}m**.`).setColor(0x95A5A6);
+                return interaction.editReply({ embeds: [embed] });
+            }
+            const active = await getGuessActive(user.id);
+            if (active) {
+                const entry = PLAYERS.find(p => p.name === active.playerName);
+                const idx = Math.max(1, active.hintIndex);
+                const shown = entry ? entry.hints.slice(0, idx).map((h, i) => `Hint ${i+1}: ${h}`).join('\n') : "No hints available.";
+                const embed = new EmbedBuilder().setTitle("🕵️ Guess the Player").setDescription(shown).setColor(0x8E44AD).setFooter({ text: "One guess only • Use /guess to answer" });
+                const rowComp = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_next').setLabel('Next Hint').setStyle(ButtonStyle.Primary));
+                return interaction.editReply({ embeds: [embed], components: [rowComp] });
+            }
+            const entry = PLAYERS[Math.floor(Math.random() * PLAYERS.length)];
+            await setGuessActive(user.id, entry.name);
+            const first = entry.hints[0] || "No hint.";
+            const embed = new EmbedBuilder().setTitle("🕵️ Guess the Player").setDescription(`Hint 1: ${first}`).setColor(0x8E44AD).setFooter({ text: "One guess only • Use /guess to answer" });
+            const rowComp = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_next').setLabel('Next Hint').setStyle(ButtonStyle.Primary));
+            return interaction.editReply({ embeds: [embed], components: [rowComp] });
+        }
+
+        if (commandName === 'guess') {
+            const active = await getGuessActive(user.id);
+            if (!active) return interaction.editReply("❌ No active player. Use `/guesstheplayer`.");
+            const nameInput = options.getString('name');
+            const correct = isNameMatch(nameInput, active.playerName);
+            if (correct) {
+                await clearGuessActive(user.id);
+                await setGuessCooldown(user.id);
+                await addUserCoins(user.id, 10);
+                const embed = new EmbedBuilder().setTitle("✅ Correct Player").setDescription(`You earned **10** coins.\nAnswer: ${active.playerName}`).setColor(0x2ECC71);
+                return interaction.editReply({ embeds: [embed], components: [] });
+            }
+            await clearGuessActive(user.id);
+            await setGuessCooldown(user.id);
+            const embed = new EmbedBuilder().setTitle("❌ Wrong Player").setDescription("One guess only. Try again after cooldown.").setColor(0xE74C3C);
+            return interaction.editReply({ embeds: [embed], components: [] });
+        }
         if (commandName === 'questions') {
             const isAdmin = guild && interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
             if (!isAdmin) return interaction.editReply("❌ Admins only.");
@@ -820,4 +936,3 @@ client.on(Events.InteractionCreate, async interaction => {
 });
 
 client.login(DISCORD_TOKEN);
-
