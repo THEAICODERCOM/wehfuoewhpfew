@@ -539,29 +539,349 @@ const SHOP = [
     { name: 'Chess GOAT', description: 'Top-tier recognition across the server.', price: 1000, roleId: '1455250931473191148' }
 ];
 
+const PLAYERS_TEXT = `
+1. Magnus Carlsen
+Youngest world No. 1 in history
+Dominated classical, rapid, and blitz simultaneously
+Slammed the table vs Gukesh (2023)
+Voluntarily gave up the world title
+Famous for squeezing wins from equal endgames
+2. Garry Kasparov
+Youngest world champion at the time
+Symbol of aggressive, dynamic chess
+Historic matches vs Deep Blue
+Ruled the rating list for over 20 years
+Became a political activist after retiring
+3. Bobby Fischer
+Only American world champion
+Ended Soviet dominance in 1972
+Perfect 6–0–6 Candidates run
+Extremely controversial personality
+Vanished from elite chess after his title
+4. Anatoly Karpov
+Master of prophylactic chess
+Became world champion without a match (1975)
+Legendary rivalry with Kasparov
+Incredible tournament consistency
+Famous for slowly suffocating opponents
+5. Vladimir Kramnik
+Ended Kasparov’s reign
+Popularized the Berlin Defense
+Deep positional understanding
+Later involved in cheating controversies
+Elite opening theoretician
+6. Viswanathan Anand
+India’s first world champion
+Extremely fast calculator
+World champion in three different formats
+Known for mental resilience
+National icon in India
+7. Hikaru Nakamura
+One of the best blitz players ever
+Twitch & YouTube chess superstar
+Known for speed and trash talk
+Candidates comeback in 2022
+Online chess legend
+8. Fabiano Caruana
+Came closest to beating Magnus (2018)
+Rating peak over 2840
+Extremely precise opening prep
+Known for deep preparation
+Calm, analytical style
+9. Ding Liren
+China’s first world champion
+Famous 100+ game unbeaten streak
+Very calm playing style
+Overcame serious mental struggles
+Elite defender
+10. Alireza Firouzja
+Youngest player to reach 2800
+Switched federations from Iran to France
+Ultra-aggressive style
+Fashion designer on the side
+Touted as a future world champion
+11. Mikhail Tal
+“The Magician from Riga”
+Sacrificed pieces without full calculation
+World champion in 1960
+Pure intuition and chaos
+Crowd favorite
+12. José Raúl Capablanca
+Natural chess genius
+Minimal theory, maximum dominance
+Legendary endgame technique
+Very long unbeaten streaks
+Third world champion
+13. Emanuel Lasker
+Longest-reigning world champion (27 years)
+Philosopher and mathematician
+Psychological approach to chess
+Defeated multiple generations
+Extremely pragmatic
+14. Alexander Alekhine
+Ferocious attacking world champion
+Never lost the title over the board
+Namesake of the Alekhine Defense
+Brilliant combinations
+Tragic personal life
+15. Mikhail Botvinnik
+Father of the Soviet chess school
+Multiple-time world champion
+Mentor to Karpov and Kasparov
+Scientific approach to chess
+Dominated post-war chess
+16. Wesley So
+Known for sportsmanship
+Elite endgame technician
+Olympiad champion with the USA
+Calm and disciplined style
+Strong mental control
+17. Ian Nepomniachtchi
+Multiple Candidates winner
+Extremely fast decision-maker
+Collapsed in world championship matches
+Highly creative
+Childhood rival of Magnus
+18. Levon Aronian
+One of the most beloved players
+Creative sacrifices
+Olympiad champion with Armenia
+Known for humor
+Universal playing style
+19. Sergey Karjakin
+Youngest grandmaster ever
+World championship challenger (2016)
+Defensive monster
+Political controversies
+Extremely resilient
+20. Teimour Radjabov
+Beat Kasparov at age 15
+Extremely solid openings
+Longtime Candidates contender
+Cautious playing style
+Strong comeback after long break
+21. Paul Morphy
+Greatest talent of the 19th century
+Dominated Europe and America
+Attacking genius
+Retired very early
+Legend without a world title
+22. Judit Polgár
+Strongest female player ever
+Defeated multiple world champions
+Never played women-only events
+Aggressive attacking style
+Broke gender barriers
+23. Max Euwe
+Mathematician world champion
+Known for fair play
+Defeated Alekhine
+Later became FIDE president
+Logical, structured style
+24. Boris Spassky
+Gentleman world champion
+Lost the legendary match vs Fischer
+Universal playing style
+Politically neutral
+Elegant chess
+25. Veselin Topalov
+Extremely aggressive player
+Dominated San Luis 2005
+World champion that year
+Involved in the Kramnik controversy
+Tactical powerhouse
+26. Shakhriyar Mamedyarov
+Always plays for a win
+Wild, tactical games
+Fan favorite
+Explosive attacks
+High-risk style
+27. Anish Giri
+Opening theory expert
+Famous for chess memes
+Extremely solid
+Long unbeaten streaks
+Elite preparation
+28. Gukesh D
+Youngest world championship challenger
+Defeated Magnus multiple times
+Part of India’s golden generation
+Fearless under pressure
+Calm personality
+29. Praggnanandhaa
+Beat Magnus as a teenager
+Rapid learner
+Strong calculator
+Olympiad hero
+Remarkable maturity
+30. Vidit Gujrathi
+Candidates participant
+Very solid player
+Excellent team competitor
+Long underrated
+Universal style
+31. Richard Rapport
+Eccentric opening choices
+Highly creative
+Known for colorful outfits
+Chaos-driven chess
+Artistic approach
+32. Jan-Krzysztof Duda
+Ended Magnus’ unbeaten streak
+World Cup finalist
+Strong rapid player
+Fearless competitor
+Excellent endgames
+33. Yi Wei
+Chinese elite grandmaster
+Positional expert
+Low media presence
+Strong middlegames
+Very solid
+34. Samuel Reshevsky
+Child prodigy
+Tactical fighter
+American legend
+Orthodox Jewish faith
+Extremely long career
+35. Tigran Petrosian
+Defensive genius
+Nicknamed “Iron Tigran”
+Sacrificed for defense
+Very hard to beat
+Prophylaxis master
+36. David Bronstein
+Nearly became world champion
+Creative thinker
+Major theoretical innovator
+Influential author
+Famous sacrifice ideas
+37. Soviet Chess School (Botvinnik legacy)
+Revolutionized training methods
+Emphasized deep analysis
+Structured thinking
+Influence still visible today
+Systematic preparation
+38. Bent Larsen
+Western chess hope
+Highly original openings
+Challenged Soviet dominance
+Fearless attacker
+Unorthodox style
+39. Peter Svidler
+Grünfeld Defense expert
+Top-level commentator
+Multiple-time Russian champion
+Known for humor
+Elite theoretician
+40. Wesley So (Rapid Chess)
+Multiple-time rapid world champion
+Endgame machine
+Extremely clean technique
+Rarely blunders
+Ice-cold nerves
+41. Hou Yifan
+Strongest active female player
+Competed regularly vs top GMs
+Academic career alongside chess
+Strategic style
+Global role model
+42. AlphaZero (Bonus)
+AI that revolutionized chess
+Played Tal-like sacrifices
+Learned without human input
+Changed opening theory
+Inspired modern engines
+43. Fischer (Theoretical Impact)
+Invented Fischer Random (Chess960)
+Hated quick draws
+Opening innovator
+Endgame perfectionist
+Absolute perfectionist mindset
+44. Viktor Korchnoi
+Fierce lifelong fighter
+Political defector
+Extreme willpower
+Never became world champion
+Legendary mental toughness
+45. Daniil Dubov
+Creative Carlsen second
+Loves sacrifices
+Modern attacking ideas
+Blitz specialist
+Highly unconventional
+46. Arjun Erigaisi
+One of the fastest rating climbs ever
+Extremely aggressive
+New-generation star
+Fearless approach
+Strong calculation
+47. Nihal Sarin
+Blitz prodigy
+Lightning-fast moves
+Online chess monster
+Tactical vision
+Very young elite
+48. Gata Kamsky
+World championship finalist
+Legendary comeback story
+Calm personality
+Solid style
+Long elite career
+49. Alexander Grischuk
+Famous for time trouble
+Elite blitz player
+Very humorous
+Risk-taking style
+Massive experience
+50. Magnus Carlsen (Mental Edge)
+Wins from “nothing”
+Hates quick draws
+Applies constant psychological pressure
+Tortures opponents in endgames
+Central figure in the GOAT debate
+`;
+
 let PLAYERS = [];
-const loadPlayers = () => {
-    try {
-        const txt = fs.readFileSync('/Users/ali_sadik/Documents/trae_projects/Chess-Bot/Chess player', 'utf8');
-        const lines = txt.split(/\r?\n/);
-        const entries = [];
-        let current = null;
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-            const m = line.match(/^(\d+)\.\s+(.*)$/);
-            if (m) {
-                const num = parseInt(m[1], 10);
-                const name = m[2].trim();
-                if (current) entries.push(current);
-                current = { num, name, hints: [] };
-                continue;
-            }
-            if (current) current.hints.push(line);
+const parsePlayers = (txt) => {
+    const lines = txt.split(/\r?\n/);
+    const entries = [];
+    let current = null;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const m = line.match(/^(\d+)\.\s+(.*)$/);
+        if (m) {
+            const num = parseInt(m[1], 10);
+            const name = m[2].trim();
+            if (current) entries.push(current);
+            current = { num, name, hints: [] };
+            continue;
         }
-        if (current) entries.push(current);
-        const filtered = entries.filter(e => e.num !== 50);
-        PLAYERS = filtered.map(e => ({ name: e.name, hints: e.hints.slice(0, 5) }));
+        if (current) current.hints.push(line);
+    }
+    if (current) entries.push(current);
+    const filtered = entries.filter(e => e.num !== 50);
+    return filtered.map(e => ({ name: e.name, hints: e.hints.slice(0, 5) }));
+};
+const loadPlayers = () => {
+    let txt = null;
+    const candidates = [
+        process.cwd() + '/Chess player',
+        __dirname + '/Chess player',
+        '/Users/ali_sadik/Documents/trae_projects/Chess-Bot/Chess player'
+    ];
+    for (const p of candidates) {
+        try {
+            if (fs.existsSync(p)) {
+                txt = fs.readFileSync(p, 'utf8');
+                break;
+            }
+        } catch {}
+    }
+    if (!txt) txt = PLAYERS_TEXT;
+    try {
+        PLAYERS = parsePlayers(txt);
     } catch {
         PLAYERS = [];
     }
