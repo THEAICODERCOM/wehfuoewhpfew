@@ -32,6 +32,7 @@ db.serialize(() => {
     db.run('CREATE TABLE IF NOT EXISTS quiz_stats (userId TEXT PRIMARY KEY, correct INTEGER NOT NULL DEFAULT 0, wrong INTEGER NOT NULL DEFAULT 0)');
     db.run('CREATE TABLE IF NOT EXISTS guess_active (userId TEXT PRIMARY KEY, playerName TEXT NOT NULL, askedAt INTEGER NOT NULL, hintIndex INTEGER NOT NULL DEFAULT 1)');
     db.run('CREATE TABLE IF NOT EXISTS guess_cooldown (userId TEXT PRIMARY KEY, lastUsed INTEGER NOT NULL)');
+    db.run('CREATE TABLE IF NOT EXISTS server_coins (guildId TEXT NOT NULL, userId TEXT NOT NULL, coins INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (guildId, userId))');
 });
 
 // ---------------------------
@@ -48,10 +49,31 @@ const getUserData = userId => new Promise((res, rej) => {
     });
 });
 
-const addUserCoins = (userId, amount) => new Promise((res, rej) => {
+const addUserCoins = (userId, amount, guildId = null) => new Promise((res, rej) => {
+    // Always update global coins
     db.run('INSERT OR IGNORE INTO users (userId, coins) VALUES (?,0)', [userId], err => {
         if (err) return rej(err);
-        db.run('UPDATE users SET coins = coins + ? WHERE userId = ?', [amount, userId], e => e ? rej(e) : res());
+        db.run('UPDATE users SET coins = coins + ? WHERE userId = ?', [amount, userId], e => {
+            if (e) return rej(e);
+            // If guildId is provided, also update server-specific coins
+            if (guildId) {
+                db.run('INSERT OR IGNORE INTO server_coins (guildId, userId, coins) VALUES (?, ?, 0)', [guildId, userId], err2 => {
+                    if (err2) return rej(err2);
+                    db.run('UPDATE server_coins SET coins = coins + ? WHERE guildId = ? AND userId = ?', [amount, guildId, userId], e2 => e2 ? rej(e2) : res());
+                });
+            } else {
+                res();
+            }
+        });
+    });
+});
+
+const getServerUserData = (guildId, userId) => new Promise((res, rej) => {
+    db.get('SELECT coins FROM server_coins WHERE guildId = ? AND userId = ?', [guildId, userId], (e, r) => {
+        if (e) rej(e);
+        else if (!r) {
+            db.run('INSERT OR IGNORE INTO server_coins (guildId, userId, coins) VALUES (?, ?, 0)', [guildId, userId], () => res({ coins: 0 }));
+        } else res(r);
     });
 });
 
@@ -955,30 +977,32 @@ client.on(Events.InteractionCreate, async interaction => {
                 return;
             }
             if (customId.startsWith('shop_buy:')) {
-                const roleId = customId.split(':')[1];
-                const item = SHOP.find(s => s.roleId === roleId);
+                const itemName = customId.split(':')[1];
+                const item = SHOP.find(s => s.name === itemName);
                 if (!item) { await interaction.followUp({ content: "Item not found.", ephemeral: true }); return; }
                 const member = await guild.members.fetch(user.id);
-                if (member.roles.cache.has(roleId)) { await interaction.followUp({ content: "You already own this role.", ephemeral: true }); return; }
-                const data = await getUserData(user.id);
-                if (data.coins < item.price) { await interaction.followUp({ content: "Insufficient funds to buy this item.", ephemeral: true }); return; }
-                const role = guild.roles.cache.get(roleId);
-                if (!role) { await interaction.followUp({ content: "Role not found in this server.", ephemeral: true }); return; }
-                await member.roles.add(roleId);
-                await addUserCoins(user.id, -item.price);
+                const role = guild.roles.cache.find(r => r.name === item.name);
+                if (!role) { await interaction.followUp({ content: `Role "${item.name}" not found in this server. Please contact an admin to create it.`, ephemeral: true }); return; }
+                if (member.roles.cache.has(role.id)) { await interaction.followUp({ content: "You already own this role.", ephemeral: true }); return; }
+                const data = await getServerUserData(guild.id, user.id);
+                if (data.coins < item.price) { await interaction.followUp({ content: "Insufficient funds in this server to buy this item.", ephemeral: true }); return; }
+                await member.roles.add(role.id);
+                await addUserCoins(user.id, -item.price, guild.id);
                 const newMember = await guild.members.fetch(user.id);
-                const newData = await getUserData(user.id);
+                const newData = await getServerUserData(guild.id, user.id);
                 const fields = SHOP.map(s => {
-                    const owned = newMember.roles.cache.has(s.roleId);
-                    const roleMention = `<@&${s.roleId}>`;
+                    const sRole = guild.roles.cache.find(r => r.name === s.name);
+                    const owned = sRole ? newMember.roles.cache.has(sRole.id) : false;
+                    const roleMention = sRole ? `<@&${sRole.id}>` : `Role "${s.name}" (Not Found)`;
                     const ownedTxt = owned ? "Already Owned" : "Not Owned";
                     return { name: `♟️ ${s.name}`, value: `📝 Description: ${s.description}\n💰 Price: ${s.price} coins\n🎭 Role: ${roleMention}\n✅ Status: ${ownedTxt}`, inline: false };
                 });
                 const embed = new EmbedBuilder().setTitle(`🛒 Server Shop • Balance: ${newData.coins} coins`).addFields(fields).setColor(0x3498DB);
                 const buttons = SHOP.map(s => {
-                    const owned = newMember.roles.cache.has(s.roleId);
+                    const sRole = guild.roles.cache.find(r => r.name === s.name);
+                    const owned = sRole ? newMember.roles.cache.has(sRole.id) : false;
                     const label = owned ? `Owned: ${s.name}` : `Buy ${s.name} • ${s.price} Coins`;
-                    return new ButtonBuilder().setCustomId(`shop_buy:${s.roleId}`).setLabel(label).setEmoji('🛒').setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Primary).setDisabled(owned);
+                    return new ButtonBuilder().setCustomId(`shop_buy:${s.name}`).setLabel(label).setEmoji('🛒').setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Primary).setDisabled(owned);
                 });
                 const rows = [];
                 for (let i = 0; i < buttons.length; i += 5) {
@@ -1051,7 +1075,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
                 if (!timedOut && correct) {
                     await incQuizStat(user.id, 'correct');
-                    await addUserCoins(user.id, q.reward);
+                    await addUserCoins(user.id, q.reward, guild.id);
                     const embed = new EmbedBuilder()
                         .setTitle("✅ Correct Answer")
                         .setDescription(`You earned **${q.reward}** coins.\nAnswer: ${q.answer}`)
@@ -1074,7 +1098,7 @@ client.on(Events.InteractionCreate, async interaction => {
             if (commandName === 'daily') {
                 const data = await getUserData(user.id);
                 if (Date.now() - data.lastDaily < 86400000) return interaction.editReply("⏳ Already claimed today!");
-                await addUserCoins(user.id, 25);
+                await addUserCoins(user.id, 25, guild.id);
                 db.run('UPDATE users SET lastDaily = ? WHERE userId = ?', [Date.now(), user.id]);
                 const embed = new EmbedBuilder().setTitle("🎁 Daily Reward").setDescription("You received 25 coins.").setColor(0x00FF00);
                 return interaction.editReply({ embeds: [embed] });
@@ -1082,8 +1106,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
             if (commandName === 'balance') {
                 const target = options.getUser('user') || user;
-                const data = await getUserData(target.id);
-                const embed = new EmbedBuilder().setTitle("💰 Balance").setDescription(`User: ${target.username}\nCoins: ${data.coins}`).setColor(0x3498DB);
+                const data = await getServerUserData(guild.id, target.id);
+                const embed = new EmbedBuilder().setTitle("💰 Server Balance").setDescription(`User: ${target.username}\nServer Coins: ${data.coins}`).setColor(0x3498DB);
                 return interaction.editReply({ embeds: [embed] });
             }
 
@@ -1142,13 +1166,13 @@ client.on(Events.InteractionCreate, async interaction => {
                 if (!active) return interaction.editReply("❌ No active player. Use `/guesstheplayer`.");
                 const nameInput = options.getString('name');
                 const correct = isNameMatch(nameInput, active.playerName);
-                if (correct) {
+                   if (correct) {
                     await clearGuessActive(user.id);
                     await setGuessCooldown(user.id);
-                    await addUserCoins(user.id, 10);
+                    await addUserCoins(user.id, 10, guild.id);
                     const embed = new EmbedBuilder().setTitle("✅ Correct Player").setDescription(`You earned **10** coins.\nAnswer: ${active.playerName}`).setColor(0x2ECC71);
                     return interaction.editReply({ embeds: [embed], components: [] });
-                }
+                }      }
                 await clearGuessActive(user.id);
                 await setGuessCooldown(user.id);
                 const embed = new EmbedBuilder().setTitle("❌ Wrong Player").setDescription("One guess only. Try again after cooldown.").setColor(0xE74C3C);
@@ -1189,10 +1213,11 @@ client.on(Events.InteractionCreate, async interaction => {
 
             if (commandName === 'shop') {
                 const member = await guild.members.fetch(user.id);
-                const data = await getUserData(user.id);
+                const data = await getServerUserData(guild.id, user.id);
                 const fields = SHOP.map(s => {
-                    const owned = member.roles.cache.has(s.roleId);
-                    const roleMention = `<@&${s.roleId}>`;
+                    const sRole = guild.roles.cache.find(r => r.name === s.name);
+                    const owned = sRole ? member.roles.cache.has(sRole.id) : false;
+                    const roleMention = sRole ? `<@&${sRole.id}>` : `Role "${s.name}" (Not Found)`;
                     const ownedTxt = owned ? "Already Owned" : "Not Owned";
                     return {
                         name: `♟️ ${s.name}`,
@@ -1205,10 +1230,11 @@ client.on(Events.InteractionCreate, async interaction => {
                     .addFields(fields)
                     .setColor(0x3498DB);
                 const buttons = SHOP.map(s => {
-                    const owned = member.roles.cache.has(s.roleId);
+                    const sRole = guild.roles.cache.find(r => r.name === s.name);
+                    const owned = sRole ? member.roles.cache.has(sRole.id) : false;
                     const label = owned ? `Owned: ${s.name}` : `Buy ${s.name} • ${s.price} Coins`;
                     return new ButtonBuilder()
-                        .setCustomId(`shop_buy:${s.roleId}`)
+                        .setCustomId(`shop_buy:${s.name}`)
                         .setLabel(label)
                         .setEmoji('🛒')
                         .setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Primary)
@@ -1227,15 +1253,15 @@ client.on(Events.InteractionCreate, async interaction => {
             if (commandName === 'addmoney') {
                 const target = options.getUser('user');
                 const amount = options.getInteger('amount');
-                await addUserCoins(target.id, amount);
-                return interaction.editReply(`✅ Added **${amount}** coins to <@${target.id}>.`);
+                await addUserCoins(target.id, amount, guild.id);
+                return interaction.editReply(`✅ Added **${amount}** coins to <@${target.id}> (Global & Server).`);
             }
 
             if (commandName === 'removemoney') {
                 const target = options.getUser('user');
                 const amount = options.getInteger('amount');
-                await addUserCoins(target.id, -amount);
-                return interaction.editReply(`✅ Removed **${amount}** coins from <@${target.id}>.`);
+                await addUserCoins(target.id, -amount, guild.id);
+                return interaction.editReply(`✅ Removed **${amount}** coins from <@${target.id}> (Global & Server).`);
             }
         }
 
