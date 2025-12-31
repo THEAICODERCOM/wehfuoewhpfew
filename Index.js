@@ -906,7 +906,7 @@ client.once(Events.ClientReady, async () => {
             { 
                 name: 'item', 
                 description: 'Manage shop items',
-                default_member_permissions: PermissionFlagsBits.Administrator.toString(),
+                default_member_permissions: (PermissionFlagsBits.Administrator | PermissionFlagsBits.ManageRoles).toString(),
                 options: [
                     {
                         name: 'create',
@@ -923,7 +923,7 @@ client.once(Events.ClientReady, async () => {
                         description: 'Edit an existing shop item (Admins only)',
                         type: ApplicationCommandOptionType.Subcommand,
                         options: [
-                            { name: 'name', description: 'The current name of the item to edit', type: ApplicationCommandOptionType.String, required: true },
+                            { name: 'name', description: 'The current name of the item to edit', type: ApplicationCommandOptionType.String, required: true, autocomplete: true },
                             { name: 'new_name', description: 'New name for the item', type: ApplicationCommandOptionType.String, required: false },
                             { name: 'price', description: 'New price for the item', type: ApplicationCommandOptionType.Integer, required: false },
                             { name: 'role', description: 'New role for the item', type: ApplicationCommandOptionType.Role, required: false }
@@ -934,19 +934,24 @@ client.once(Events.ClientReady, async () => {
                         description: 'Delete an item or the entire shop (Admins only)',
                         type: ApplicationCommandOptionType.Subcommand,
                         options: [
-                            { name: 'name', description: 'Item name to delete, or type "all" to clear the shop', type: ApplicationCommandOptionType.String, required: true }
+                            { name: 'name', description: 'Item name to delete, or type "all" to clear the shop', type: ApplicationCommandOptionType.String, required: true, autocomplete: true }
                         ]
                     }
                 ]
+            },
+            {
+                name: 'shop-delete-all',
+                description: 'Delete all items from the server shop (Admins only)',
+                default_member_permissions: (PermissionFlagsBits.Administrator | PermissionFlagsBits.ManageRoles).toString()
             },
             { name: 'chessquiz', description: 'Get a question (5m cooldown)' },
             { name: 'answer', description: 'Answer the quiz', options: [{ name: 'text', description: 'Your chess answer', type: ApplicationCommandOptionType.String, required: true }] },
             { name: 'guesstheplayer', description: 'Start Guess the Player (10m cooldown, hints cost 5 coins)' },
             { name: 'guess', description: 'Submit your player guess', options: [{ name: 'name', description: 'Player name', type: ApplicationCommandOptionType.String, required: true }] },
             { name: 'ration', description: 'Show your quiz stats' },
-            { name: 'questions', description: 'Admin: View quiz questions', default_member_permissions: PermissionFlagsBits.Administrator.toString(), options: [{ name: 'page', description: 'Page number (1-15)', type: ApplicationCommandOptionType.Integer, required: false }] },
-            { name: 'addmoney', description: 'Admin: Add coins', default_member_permissions: PermissionFlagsBits.Administrator.toString(), options: [{ name: 'user', description: 'User to give coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to add', type: ApplicationCommandOptionType.Integer, required: true }] },
-            { name: 'removemoney', description: 'Admin: Remove coins', default_member_permissions: PermissionFlagsBits.Administrator.toString(), options: [{ name: 'user', description: 'User to remove coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to remove', type: ApplicationCommandOptionType.Integer, required: true }] }
+            { name: 'questions', description: 'Admin: View quiz questions', default_member_permissions: (PermissionFlagsBits.Administrator | PermissionFlagsBits.ManageRoles).toString(), options: [{ name: 'page', description: 'Page number (1-15)', type: ApplicationCommandOptionType.Integer, required: false }] },
+            { name: 'addmoney', description: 'Admin: Add coins', default_member_permissions: (PermissionFlagsBits.Administrator | PermissionFlagsBits.ManageRoles).toString(), options: [{ name: 'user', description: 'User to give coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to add', type: ApplicationCommandOptionType.Integer, required: true }] },
+            { name: 'removemoney', description: 'Admin: Remove coins', default_member_permissions: (PermissionFlagsBits.Administrator | PermissionFlagsBits.ManageRoles).toString(), options: [{ name: 'user', description: 'User to remove coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to remove', type: ApplicationCommandOptionType.Integer, required: true }] }
         ]);
         console.log(`✅ Logged in as ${client.user.tag}`);
     } catch (err) {
@@ -973,6 +978,18 @@ async function getRandomQuizForUser(userId) {
 client.on(Events.InteractionCreate, async interaction => {
     // 1. Immediate Deferral to prevent "Application didn't respond"
     try {
+        if (interaction.isAutocomplete()) {
+            const focusedValue = interaction.options.getFocused();
+            const shopItems = await dbAll('SELECT itemName FROM server_shop WHERE guildId = ?', [interaction.guild.id]);
+            const filtered = shopItems
+                .filter(item => item.itemName.toLowerCase().includes(focusedValue.toLowerCase()))
+                .map(item => ({ name: item.itemName, value: item.itemName }));
+            
+            // Limit to 25 choices (Discord limit)
+            await interaction.respond(filtered.slice(0, 25)).catch(() => {});
+            return;
+        }
+
         if (interaction.isButton()) {
             await interaction.deferUpdate().catch(() => {});
         } else if (interaction.isChatInputCommand()) {
@@ -1081,7 +1098,20 @@ client.on(Events.InteractionCreate, async interaction => {
                 rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_close').setLabel('Close Shop').setEmoji('🧹').setStyle(ButtonStyle.Danger)));
                 
                 await interaction.editReply({ embeds: [embed], components: rows });
-                await interaction.followUp({ content: `You successfully bought the ${item.itemName} role!`, ephemeral: true });
+                
+                const successEmbed = new EmbedBuilder()
+                    .setAuthor({ name: "🎉 Acquisition Successful" })
+                    .setTitle("Item Purchased")
+                    .setDescription(`You have successfully acquired the **${item.itemName}** role!`)
+                    .addFields(
+                        { name: '💰 Price Paid', value: `\`${item.price}\` coins`, inline: true },
+                        { name: '🎭 New Rank', value: `<@&${role.id}>`, inline: true }
+                    )
+                    .setColor(0x2ECC71)
+                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/3144/3144456.png')
+                    .setTimestamp();
+
+                await interaction.followUp({ embeds: [successEmbed], ephemeral: true });
                 return;
             }
             return;
@@ -1089,6 +1119,22 @@ client.on(Events.InteractionCreate, async interaction => {
 
         if (interaction.isChatInputCommand()) {
             const { commandName, options } = interaction;
+
+            if (commandName === 'shop-delete-all') {
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator) && !interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                    return interaction.editReply({ content: "❌ Only Administrators or users with Manage Roles can clear the shop.", ephemeral: true });
+                }
+                await new Promise((res, rej) => {
+                    db.run('DELETE FROM server_shop WHERE guildId = ?', [guild.id], e => e ? rej(e) : res());
+                });
+                const embed = new EmbedBuilder()
+                    .setAuthor({ name: "🧹 Shop Maintenance" })
+                    .setTitle("Boutique Cleared")
+                    .setDescription("All items have been successfully removed from the server shop.")
+                    .setColor(0xE67E22)
+                    .setTimestamp();
+                return interaction.editReply({ embeds: [embed] });
+            }
 
             if (commandName === 'chessquiz') {
                 const active = await getActiveQuestion(user.id);
@@ -1119,20 +1165,26 @@ client.on(Events.InteractionCreate, async interaction => {
                 }
                 const q = await getRandomQuizForUser(user.id);
                 await setActiveQuestion(user.id, q.id);
-                return interaction.editReply({
-                    embeds: [
-                        new EmbedBuilder()
-                            .setTitle("🧠 Chess Quiz")
-                            .setDescription(`❓ ${q.question}\n⏱️ You have 60s. Use /answer`)
-                            .setColor(0x00FF00)
-                            .setFooter({ text: `Reward: ${q.reward} coins` })
-                    ]
-                });
+                const embed = new EmbedBuilder()
+                    .setAuthor({ name: "🧠 Chess Challenge", iconURL: 'https://cdn-icons-png.flaticon.com/512/3565/3565418.png' })
+                    .setTitle("Tactical Puzzle")
+                    .setDescription(`**Question:**\n${q.question}\n\n⏱️ **Time Limit:** \`60 seconds\`\n📝 **How to answer:** Use \`/answer\``)
+                    .setColor(0x2ECC71)
+                    .addFields({ name: '💰 Potential Reward', value: `\`${q.reward}\` coins`, inline: true })
+                    .setFooter({ text: `Good luck, ${user.username}!` })
+                    .setTimestamp();
+                return interaction.editReply({ embeds: [embed] });
             }
 
             if (commandName === 'answer') {
                 const active = await getActiveQuestion(user.id);
-                if (!active) return interaction.editReply("❌ No active quiz. Use `/chessquiz`.");
+                if (!active) {
+                    const embed = new EmbedBuilder()
+                        .setTitle("❌ No Active Quiz")
+                        .setDescription("You don't have an active question to answer. Start one with `/chessquiz`!")
+                        .setColor(0xE74C3C);
+                    return interaction.editReply({ embeds: [embed] });
+                }
                 
                 const q = QUIZ_POOL.find(i => i.id === active.quizId);
                 const input = options.getString('text');
@@ -1148,37 +1200,70 @@ client.on(Events.InteractionCreate, async interaction => {
                     await incQuizStat(user.id, 'correct');
                     await addUserCoins(user.id, q.reward, guild.id);
                     const embed = new EmbedBuilder()
-                        .setTitle("✅ Correct Answer")
-                        .setDescription(`You earned **${q.reward}** coins.\nAnswer: ${q.answer}`)
-                        .setColor(0x2ECC71);
+                        .setAuthor({ name: "✅ Tactical Success" })
+                        .setTitle("Brilliant Move!")
+                        .setDescription(`You found the correct solution: **${q.answer}**`)
+                        .addFields({ name: '💰 Reward Earned', value: `\`${q.reward}\` coins`, inline: true })
+                        .setColor(0x2ECC71)
+                        .setThumbnail('https://cdn-icons-png.flaticon.com/512/190/190411.png')
+                        .setFooter({ text: "Keep it up!" });
                     return interaction.editReply({ embeds: [embed] });
                 }
                 await incQuizStat(user.id, 'wrong');
                 const embed = timedOut
                     ? new EmbedBuilder()
-                        .setTitle("⏱️ Time's Up")
-                        .setDescription(`Correct answer: **${q.answer}**`)
+                        .setAuthor({ name: "⏱️ Clock Flagged" })
+                        .setTitle("Time is up!")
+                        .setDescription(`You were too slow. The correct answer was: **${q.answer}**`)
                         .setColor(0xE67E22)
+                        .setThumbnail('https://cdn-icons-png.flaticon.com/512/3232/3232873.png')
                     : new EmbedBuilder()
-                        .setTitle("❌ Wrong Answer")
-                        .setDescription(`Correct answer: **${q.answer}**`)
-                        .setColor(0xE74C3C);
+                        .setAuthor({ name: "❌ Blunder" })
+                        .setTitle("Incorrect Solution")
+                        .setDescription(`That wasn't quite right. The correct answer was: **${q.answer}**`)
+                        .setColor(0xE74C3C)
+                        .setThumbnail('https://cdn-icons-png.flaticon.com/512/1156/1156641.png');
                 return interaction.editReply({ embeds: [embed] });
             }
 
             if (commandName === 'daily') {
                 const data = await getUserData(user.id);
-                if (Date.now() - data.lastDaily < 86400000) return interaction.editReply("⏳ Already claimed today!");
+                if (Date.now() - data.lastDaily < 86400000) {
+                    const remaining = 86400000 - (Date.now() - data.lastDaily);
+                    const h = Math.floor(remaining / 3600000);
+                    const m = Math.floor((remaining % 3600000) / 60000);
+                    const embed = new EmbedBuilder()
+                        .setTitle("⏳ Patience, Grandmaster")
+                        .setDescription(`You've already claimed your daily reward. Come back in **${h}h ${m}m**.`)
+                        .setColor(0x95A5A6);
+                    return interaction.editReply({ embeds: [embed] });
+                }
                 await addUserCoins(user.id, 25, guild.id);
                 db.run('UPDATE users SET lastDaily = ? WHERE userId = ?', [Date.now(), user.id]);
-                const embed = new EmbedBuilder().setTitle("🎁 Daily Reward").setDescription("You received 25 coins.").setColor(0x00FF00);
+                const embed = new EmbedBuilder()
+                    .setTitle("🎁 Daily Allowance")
+                    .setDescription("Your daily stipend has been deposited into your treasury.")
+                    .addFields({ name: '💰 Amount', value: '`25` coins', inline: true })
+                    .setColor(0x2ECC71)
+                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/1162/1162951.png')
+                    .setFooter({ text: "Come back tomorrow for more!" });
                 return interaction.editReply({ embeds: [embed] });
             }
 
             if (commandName === 'balance') {
                 const target = options.getUser('user') || user;
                 const data = await getServerUserData(guild.id, target.id);
-                const embed = new EmbedBuilder().setTitle("💰 Server Balance").setDescription(`User: ${target.username}\nServer Coins: ${data.coins}`).setColor(0x3498DB);
+                const embed = new EmbedBuilder()
+                    .setAuthor({ name: target.tag, iconURL: target.displayAvatarURL({ dynamic: true }) })
+                    .setTitle("💰 Treasury Report")
+                    .setDescription(`**${target.username}** currently holds:`)
+                    .addFields(
+                        { name: '🪙 Server Coins', value: `\`${data.coins.toLocaleString()}\``, inline: true }
+                    )
+                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/272/272525.png')
+                    .setColor(0xF1C40F)
+                    .setFooter({ text: `Requested by ${user.tag}`, iconURL: user.displayAvatarURL({ dynamic: true }) })
+                    .setTimestamp();
                 return interaction.editReply({ embeds: [embed] });
             }
 
@@ -1194,13 +1279,20 @@ client.on(Events.InteractionCreate, async interaction => {
                     rows = await dbAll('SELECT userId, coins FROM users ORDER BY coins DESC LIMIT 10');
                 }
                 const medals = ['🥇','🥈','🥉'];
-                const txt = rows.map((r, i) => `${medals[i] || `**${i+1}.**`} <@${r.userId}> • ${r.coins} coins`).join('\n') || "Empty.";
-                const title = scope === 'server' ? "🏆 Server Leaderboard" : " Global Leaderboard";
+                const txt = rows.map((r, i) => {
+                    const medal = medals[i] || `**#${i+1}**`;
+                    return `${medal} <@${r.userId}> \u2014 \`${r.coins.toLocaleString()}\` coins`;
+                }).join('\n') || "*The records are currently empty.*";
+                
+                const title = scope === 'server' ? "🏆 Server Power Rankings" : "🌍 Global Hall of Fame";
                 const embed = new EmbedBuilder()
+                    .setAuthor({ name: "📊 Competitive Standings" })
                     .setTitle(title)
-                    .setDescription(txt)
+                    .setDescription(`The top 10 strategists currently dominating the boards.\n\n${txt}`)
+                    .setThumbnail(scope === 'server' ? guild.iconURL({ dynamic: true }) : 'https://cdn-icons-png.flaticon.com/512/1021/1021204.png')
                     .setColor(0xFFD700)
-                    .setFooter({ text: "Top 10 players" });
+                    .setFooter({ text: `Scope: ${scope.charAt(0).toUpperCase() + scope.slice(1)} • Updated just now` })
+                    .setTimestamp();
                 return interaction.editReply({ embeds: [embed] });
             }
 
@@ -1210,9 +1302,13 @@ client.on(Events.InteractionCreate, async interaction => {
                 const cooldownTime = 10 * 60 * 1000;
                 if (row && (Date.now() - row.lastUsed < cooldownTime)) {
                     const diff = cooldownTime - (Date.now() - row.lastUsed);
-                    const h = Math.floor(diff / 3600000);
-                    const m = Math.floor((diff % 3600000) / 60000);
-                    const embed = new EmbedBuilder().setTitle("⏳ Cooldown Active").setDescription(`Try again in **${h}h ${m}m**.`).setColor(0x95A5A6);
+                    const m = Math.floor(diff / 60000);
+                    const s = Math.floor((diff % 60000) / 1000);
+                    const embed = new EmbedBuilder()
+                        .setTitle("⏳ Recharge Required")
+                        .setDescription(`Your tactical vision is recharging. Try again in **${m}m ${s}s**.`)
+                        .setColor(0xE74C3C)
+                        .setThumbnail('https://cdn-icons-png.flaticon.com/512/2088/2088617.png');
                     return interaction.editReply({ embeds: [embed] });
                 }
                 const data = await getServerUserData(guild.id, user.id);
@@ -1220,17 +1316,22 @@ client.on(Events.InteractionCreate, async interaction => {
                 if (active) {
                     const entry = PLAYERS.find(p => p.name === active.playerName);
                     const idx = Math.max(1, active.hintIndex);
-                    const shown = entry ? entry.hints.slice(0, idx).map((h, i) => `Hint ${i+1}: ${h}`).join('\n') : "No hints available.";
+                    const shown = entry ? entry.hints.slice(0, idx).map((h, i) => `**Hint ${i+1}:** ${h}`).join('\n') : "No hints available.";
                     const embed = new EmbedBuilder()
-                        .setTitle("🕵️ Guess the Player")
+                        .setAuthor({ name: "🕵️ Intelligence Report" })
+                        .setTitle("Guess the Grandmaster")
                         .setDescription(shown)
                         .setColor(0x8E44AD)
-                        .setFooter({ text: `Balance: ${data.coins} coins • Next hint: 5 coins` });
+                        .addFields({ name: '💰 Cost', value: 'Next hint: `5 coins`', inline: true }, { name: '🪙 Balance', value: `\`${data.coins}\` coins`, inline: true })
+                        .setFooter({ text: "Use /guess to submit your answer" });
+                    
+                    const label = idx >= entry.hints.length ? 'All Intel Gathered' : `Next Hint (5 Coins)`;
                     const rowComp = new ActionRowBuilder().addComponents(
                         new ButtonBuilder()
                             .setCustomId('guess_next')
-                            .setLabel('Next Hint (5 Coins)')
-                            .setStyle(ButtonStyle.Primary)
+                            .setLabel(label)
+                            .setStyle(idx >= entry.hints.length ? ButtonStyle.Secondary : ButtonStyle.Primary)
+                            .setDisabled(idx >= entry.hints.length)
                     );
                     return interaction.editReply({ embeds: [embed], components: [rowComp] });
                 }
@@ -1238,10 +1339,13 @@ client.on(Events.InteractionCreate, async interaction => {
                 await setGuessActive(user.id, entry.name);
                 const first = entry.hints[0] || "No hint.";
                 const embed = new EmbedBuilder()
-                    .setTitle("🕵️ Guess the Player")
-                    .setDescription(`Hint 1: ${first}`)
-                    .setColor(0x8E44AD)
-                    .setFooter({ text: `Balance: ${data.coins} coins • Next hint: 5 coins` });
+                    .setAuthor({ name: "🕵️ Intelligence Report" })
+                    .setTitle("Guess the Grandmaster")
+                    .setDescription(`**Hint 1:** ${first}`)
+                    .setColor(0x9B59B6)
+                    .addFields({ name: '💰 Cost', value: 'Next hint: `5 coins`', inline: true }, { name: '🪙 Balance', value: `\`${data.coins}\` coins`, inline: true })
+                    .setFooter({ text: "First hint is free! Use /guess to answer." });
+
                 const rowComp = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
                         .setCustomId('guess_next')
@@ -1253,24 +1357,45 @@ client.on(Events.InteractionCreate, async interaction => {
 
             if (commandName === 'guess') {
                 const active = await getGuessActive(user.id);
-                if (!active) return interaction.editReply("❌ No active player. Use `/guesstheplayer`.");
+                if (!active) {
+                    const embed = new EmbedBuilder()
+                        .setTitle("❌ No Active Intelligence Mission")
+                        .setDescription("You aren't currently tracking any players. Start a mission with `/guesstheplayer`!")
+                        .setColor(0xE74C3C);
+                    return interaction.editReply({ embeds: [embed] });
+                }
                 const nameInput = options.getString('name');
                 const correct = isNameMatch(nameInput, active.playerName);
-                   if (correct) {
-                    await clearGuessActive(user.id);
-                    await setGuessCooldown(user.id);
-                    await addUserCoins(user.id, 10, guild.id);
-                    const embed = new EmbedBuilder().setTitle("✅ Correct Player").setDescription(`You earned **10** coins.\nAnswer: ${active.playerName}`).setColor(0x2ECC71);
-                    return interaction.editReply({ embeds: [embed], components: [] });
-                }
+                
                 await clearGuessActive(user.id);
                 await setGuessCooldown(user.id);
-                const embed = new EmbedBuilder().setTitle("❌ Wrong Player").setDescription("One guess only. Try again after cooldown.").setColor(0xE74C3C);
+
+                if (correct) {
+                    await addUserCoins(user.id, 10, guild.id);
+                    const embed = new EmbedBuilder()
+                        .setAuthor({ name: "🎯 Mission Accomplished" })
+                        .setTitle("Target Identified!")
+                        .setDescription(`Brilliant deduction! The player was indeed **${active.playerName}**.`)
+                        .addFields({ name: '💰 Intelligence Bounty', value: '`10` coins', inline: true })
+                        .setColor(0x2ECC71)
+                        .setThumbnail('https://cdn-icons-png.flaticon.com/512/190/190411.png')
+                        .setFooter({ text: "Your tactical intuition is sharp." });
+                    return interaction.editReply({ embeds: [embed], components: [] });
+                }
+                
+                const embed = new EmbedBuilder()
+                    .setAuthor({ name: "❌ Mission Failed" })
+                    .setTitle("Identity Mismatch")
+                    .setDescription(`Your intelligence was incorrect. The player has escaped.`)
+                    .addFields({ name: '👤 Actual Identity', value: `||${active.playerName}||`, inline: true })
+                    .setColor(0xE74C3C)
+                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/1156/1156641.png')
+                    .setFooter({ text: "Wait for the cooldown to start a new mission." });
                 return interaction.editReply({ embeds: [embed], components: [] });
             }
             if (commandName === 'questions') {
-                const isAdmin = guild && interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
-                if (!isAdmin) return interaction.editReply("❌ Admins only.");
+                const isAdmin = guild && (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) || interaction.memberPermissions?.has(PermissionFlagsBits.ManageRoles));
+                if (!isAdmin) return interaction.editReply("❌ Admins or users with Manage Roles only.");
                 const pageSize = 20;
                 const total = QUIZ_POOL.length;
                 const totalPages = Math.ceil(total / pageSize);
@@ -1279,32 +1404,49 @@ client.on(Events.InteractionCreate, async interaction => {
                 if (page > totalPages) page = totalPages;
                 const start = (page - 1) * pageSize;
                 const slice = QUIZ_POOL.slice(start, start + pageSize);
-                const lines = slice.map(q => `#${q.id}: ❓ ${q.question}`);
-                const txt2 = lines.join('\n') || "Empty.";
-                return interaction.editReply({
-                    embeds: [
-                        new EmbedBuilder()
-                            .setTitle(`📚 Questions (${page}/${totalPages})`)
-                            .setDescription(txt2)
-                            .setColor(0x3498DB)
-                            .setFooter({ text: "Admin view" })
-                    ]
-                });
+                const lines = slice.map(q => `**#${q.id}:** ${q.question}`);
+                const txt2 = lines.join('\n') || "*No questions found.*";
+
+                const embed = new EmbedBuilder()
+                    .setAuthor({ name: "📚 Question Repository" })
+                    .setTitle(`Page ${page} of ${totalPages}`)
+                    .setDescription(txt2)
+                    .setColor(0x3498DB)
+                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/3407/3407024.png')
+                    .setFooter({ text: `Admin Access Only • Total Questions: ${total}` });
+                return interaction.editReply({ embeds: [embed] });
             }
 
             if (commandName === 'ration') {
                 const stats = await getQuizStats(user.id);
+                const total = stats.correct + stats.wrong;
+                const ratio = total > 0 ? ((stats.correct / total) * 100).toFixed(1) : 0;
+
                 const embed = new EmbedBuilder()
-                    .setTitle("📊 Quiz Stats")
-                    .setDescription(`✅ Correct: ${stats.correct}\n❌ Wrong: ${stats.wrong}`)
-                    .setColor(0x9B59B6);
+                    .setAuthor({ name: "📊 Tactical Performance Record" })
+                    .setTitle(`${user.username}'s Statistics`)
+                    .setDescription(`Detailed analysis of your chess training sessions.`)
+                    .addFields(
+                        { name: '✅ Correct Solutions', value: `\`${stats.correct}\``, inline: true },
+                        { name: '❌ Failed Puzzles', value: `\`${stats.wrong}\``, inline: true },
+                        { name: '📈 Success Rate', value: `\`${ratio}%\``, inline: true }
+                    )
+                    .setColor(ratio >= 50 ? 0x2ECC71 : 0xE74C3C)
+                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/1611/1611174.png')
+                    .setFooter({ text: "Keep practicing to improve your accuracy!" });
                 return interaction.editReply({ embeds: [embed] });
             }
 
             if (commandName === 'shop') {
                 const shopItems = await dbAll('SELECT * FROM server_shop WHERE guildId = ?', [guild.id]);
                 if (shopItems.length === 0) {
-                    return interaction.editReply({ content: "Currently there is no shop", ephemeral: true });
+                    const embed = new EmbedBuilder()
+                        .setAuthor({ name: "🛒 Grandmaster's Boutique" })
+                        .setTitle("Shop is Currently Closed")
+                        .setDescription("The local merchants haven't set up shop here yet. Check back later!")
+                        .setColor(0xE74C3C)
+                        .setThumbnail('https://cdn-icons-png.flaticon.com/512/1041/1041916.png');
+                    return interaction.editReply({ embeds: [embed], ephemeral: true });
                 }
 
                 const member = await guild.members.fetch(user.id);
@@ -1313,25 +1455,30 @@ client.on(Events.InteractionCreate, async interaction => {
                     const sRole = guild.roles.cache.get(s.roleId);
                     const owned = sRole ? member.roles.cache.has(sRole.id) : false;
                     const roleMention = sRole ? `<@&${sRole.id}>` : `Unknown Role`;
-                    const ownedTxt = owned ? "Already Owned" : "Not Owned";
+                    const status = owned ? "✅ **Already Owned**" : "🛒 **Available**";
                     return {
                         name: `♟️ ${s.itemName}`,
-                        value: `💰 Price: ${s.price} coins\n🎭 Role: ${roleMention}\n✅ Status: ${ownedTxt}`,
+                        value: `💰 **Price:** \`${s.price}\` coins\n🎭 **Role:** ${roleMention}\n✨ **Status:** ${status}`,
                         inline: false
                     };
                 });
                 const embed = new EmbedBuilder()
-                    .setTitle(`🛒 Server Shop • Balance: ${data.coins} coins`)
+                    .setAuthor({ name: "🛒 Grandmaster's Boutique", iconURL: guild.iconURL({ dynamic: true }) })
+                    .setTitle("Server Exclusive Items")
+                    .setDescription(`Welcome to the marketplace! You currently have \`${data.coins}\` coins to spend.`)
                     .addFields(fields)
-                    .setColor(0x3498DB);
+                    .setColor(0x3498DB)
+                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/3081/3081559.png')
+                    .setFooter({ text: `Browse at your leisure • ${guild.name}` });
+
                 const buttons = shopItems.map(s => {
                     const sRole = guild.roles.cache.get(s.roleId);
                     const owned = sRole ? member.roles.cache.has(sRole.id) : false;
-                    const label = owned ? `Owned: ${s.itemName}` : `Buy ${s.itemName} • ${s.price} Coins`;
+                    const label = owned ? `Owned: ${s.itemName}` : `Buy ${s.itemName} (${s.price})`;
                     return new ButtonBuilder()
                         .setCustomId(`shop_buy:${s.itemName}`)
                         .setLabel(label)
-                        .setEmoji('🛒')
+                        .setEmoji(owned ? '✅' : '🛒')
                         .setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Primary)
                         .setDisabled(owned);
                 });
@@ -1340,7 +1487,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
                 }
                 rows.push(new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('shop_close').setLabel('Close Shop').setEmoji('🧹').setStyle(ButtonStyle.Danger)
+                    new ButtonBuilder().setCustomId('shop_close').setLabel('Leave Shop').setEmoji('🚪').setStyle(ButtonStyle.Danger)
                 ));
                 return interaction.editReply({ embeds: [embed], components: rows });
             }
@@ -1348,8 +1495,8 @@ client.on(Events.InteractionCreate, async interaction => {
             if (commandName === 'item') {
                 const sub = options.getSubcommand();
                 if (sub === 'create') {
-                    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                        return interaction.editReply({ content: "❌ Only Administrators can create shop items.", ephemeral: true });
+                    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator) && !interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                        return interaction.editReply({ content: "❌ Only Administrators or users with Manage Roles can create shop items.", ephemeral: true });
                     }
                     const name = options.getString('name');
                     const role = options.getRole('role');
@@ -1358,19 +1505,34 @@ client.on(Events.InteractionCreate, async interaction => {
                     const countResult = await dbAll('SELECT COUNT(*) as c FROM server_shop WHERE guildId = ?', [guild.id]);
                     const count = countResult[0].c;
                     if (count >= 10) {
-                        return interaction.editReply({ content: "All slots are full", ephemeral: true });
+                        const embed = new EmbedBuilder()
+                            .setTitle("🚫 Inventory Full")
+                            .setDescription("Your shop has reached the maximum capacity of **10 items**. Delete an item to make room for more.")
+                            .setColor(0xE74C3C);
+                        return interaction.editReply({ embeds: [embed], ephemeral: true });
                     }
 
                     await new Promise((res, rej) => {
                         db.run('INSERT OR REPLACE INTO server_shop (guildId, itemName, roleId, price) VALUES (?, ?, ?, ?)', [guild.id, name, role.id, price], e => e ? rej(e) : res());
                     });
 
-                    return interaction.editReply(`✅ Item **${name}** created for **${price}** coins!`);
+                    const embed = new EmbedBuilder()
+                        .setAuthor({ name: "🛠️ Merchant Tools" })
+                        .setTitle("Item Created Successfully")
+                        .setDescription(`A new item has been added to the boutique.`)
+                        .addFields(
+                            { name: '📦 Item Name', value: `\`${name}\``, inline: true },
+                            { name: '💰 Price', value: `\`${price}\` coins`, inline: true },
+                            { name: '🎭 Role', value: `<@&${role.id}>`, inline: true }
+                        )
+                        .setColor(0x2ECC71)
+                        .setTimestamp();
+                    return interaction.editReply({ embeds: [embed] });
                 }
 
                 if (sub === 'edit') {
-                    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                        return interaction.editReply({ content: "❌ Only Administrators can edit shop items.", ephemeral: true });
+                    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator) && !interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                        return interaction.editReply({ content: "❌ Only Administrators or users with Manage Roles can edit shop items.", ephemeral: true });
                     }
                     const name = options.getString('name');
                     const newName = options.getString('new_name');
@@ -1378,7 +1540,13 @@ client.on(Events.InteractionCreate, async interaction => {
                     const newRole = options.getRole('role');
 
                     const item = (await dbAll('SELECT * FROM server_shop WHERE guildId = ? AND itemName = ?', [guild.id, name]))[0];
-                    if (!item) return interaction.editReply({ content: `❌ Item **${name}** not found.`, ephemeral: true });
+                    if (!item) {
+                        const embed = new EmbedBuilder()
+                            .setTitle("❌ Item Not Found")
+                            .setDescription(`The item **${name}** does not exist in your shop.`)
+                            .setColor(0xE74C3C);
+                        return interaction.editReply({ embeds: [embed], ephemeral: true });
+                    }
 
                     if (newName) {
                         await new Promise((res, rej) => {
@@ -1400,19 +1568,30 @@ client.on(Events.InteractionCreate, async interaction => {
                         });
                     }
                     
-                    return interaction.editReply(`✅ Successfully updated item **${name}**!`);
+                    const embed = new EmbedBuilder()
+                        .setAuthor({ name: "🛠️ Merchant Tools" })
+                        .setTitle("Item Updated")
+                        .setDescription(`Modifications to **${name}** have been finalized.`)
+                        .setColor(0x3498DB)
+                        .setTimestamp();
+                    return interaction.editReply({ embeds: [embed] });
                 }
 
                 if (sub === 'delete') {
-                    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                        return interaction.editReply({ content: "❌ Only Administrators can delete shop items.", ephemeral: true });
+                    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator) && !interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                        return interaction.editReply({ content: "❌ Only Administrators or users with Manage Roles can delete shop items.", ephemeral: true });
                     }
                     const name = options.getString('name');
                     if (name.toLowerCase() === 'all') {
                         await new Promise((res, rej) => {
                             db.run('DELETE FROM server_shop WHERE guildId = ?', [guild.id], e => e ? rej(e) : res());
                         });
-                        return interaction.editReply("✅ Successfully deleted the entire shop for this server.");
+                        const embed = new EmbedBuilder()
+                            .setAuthor({ name: "🛠️ Merchant Tools" })
+                            .setTitle("Shop Cleared")
+                            .setDescription("All items have been removed from the boutique.")
+                            .setColor(0xE67E22);
+                        return interaction.editReply({ embeds: [embed] });
                     } else {
                         const result = await new Promise((res, rej) => {
                             db.run('DELETE FROM server_shop WHERE guildId = ? AND itemName = ?', [guild.id, name], function(e) {
@@ -1420,24 +1599,59 @@ client.on(Events.InteractionCreate, async interaction => {
                                 else res(this.changes);
                             });
                         });
-                        if (result === 0) return interaction.editReply({ content: `❌ Item **${name}** not found.`, ephemeral: true });
-                        return interaction.editReply(`✅ Successfully deleted item **${name}**.`);
+                        if (result === 0) {
+                            const embed = new EmbedBuilder()
+                                .setTitle("❌ Item Not Found")
+                                .setDescription(`The item **${name}** does not exist in your shop.`)
+                                .setColor(0xE74C3C);
+                            return interaction.editReply({ embeds: [embed], ephemeral: true });
+                        }
+                        const embed = new EmbedBuilder()
+                            .setAuthor({ name: "🛠️ Merchant Tools" })
+                            .setTitle("Item Removed")
+                            .setDescription(`The item **${name}** has been removed from the boutique.`)
+                            .setColor(0xE67E22);
+                        return interaction.editReply({ embeds: [embed] });
                     }
                 }
             }
 
             if (commandName === 'addmoney') {
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator) && !interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                    return interaction.editReply({ content: "❌ Only Administrators or users with Manage Roles can manage the treasury.", ephemeral: true });
+                }
                 const target = options.getUser('user');
                 const amount = options.getInteger('amount');
                 await addUserCoins(target.id, amount, guild.id);
-                return interaction.editReply(`✅ Added **${amount}** coins to <@${target.id}> (Global & Server).`);
+                
+                const embed = new EmbedBuilder()
+                    .setAuthor({ name: "💸 Treasury Transaction" })
+                    .setTitle("Funds Granted")
+                    .setDescription(`An imperial grant of **${amount}** coins has been issued.`)
+                    .addFields({ name: '👤 Recipient', value: `<@${target.id}>`, inline: true })
+                    .setColor(0x2ECC71)
+                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/2454/2454282.png')
+                    .setTimestamp();
+                return interaction.editReply({ embeds: [embed] });
             }
 
             if (commandName === 'removemoney') {
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator) && !interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                    return interaction.editReply({ content: "❌ Only Administrators or users with Manage Roles can manage the treasury.", ephemeral: true });
+                }
                 const target = options.getUser('user');
                 const amount = options.getInteger('amount');
                 await addUserCoins(target.id, -amount, guild.id);
-                return interaction.editReply(`✅ Removed **${amount}** coins from <@${target.id}> (Global & Server).`);
+
+                const embed = new EmbedBuilder()
+                    .setAuthor({ name: "💸 Treasury Transaction" })
+                    .setTitle("Funds Revoked")
+                    .setDescription(`A penalty of **${amount}** coins has been deducted.`)
+                    .addFields({ name: '👤 Target', value: `<@${target.id}>`, inline: true })
+                    .setColor(0xE74C3C)
+                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/2454/2454297.png')
+                    .setTimestamp();
+                return interaction.editReply({ embeds: [embed] });
             }
         }
 
