@@ -1172,7 +1172,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     await addUserCoins(user.id, 10, guild.id);
                     const embed = new EmbedBuilder().setTitle("✅ Correct Player").setDescription(`You earned **10** coins.\nAnswer: ${active.playerName}`).setColor(0x2ECC71);
                     return interaction.editReply({ embeds: [embed], components: [] });
-                }      }
+                }
                 await clearGuessActive(user.id);
                 await setGuessCooldown(user.id);
                 const embed = new EmbedBuilder().setTitle("❌ Wrong Player").setDescription("One guess only. Try again after cooldown.").setColor(0xE74C3C);
