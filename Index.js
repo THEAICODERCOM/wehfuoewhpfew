@@ -33,6 +33,7 @@ db.serialize(() => {
     db.run('CREATE TABLE IF NOT EXISTS guess_active (userId TEXT PRIMARY KEY, playerName TEXT NOT NULL, askedAt INTEGER NOT NULL, hintIndex INTEGER NOT NULL DEFAULT 1)');
     db.run('CREATE TABLE IF NOT EXISTS guess_cooldown (userId TEXT PRIMARY KEY, lastUsed INTEGER NOT NULL)');
     db.run('CREATE TABLE IF NOT EXISTS server_coins (guildId TEXT NOT NULL, userId TEXT NOT NULL, coins INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (guildId, userId))');
+    db.run('CREATE TABLE IF NOT EXISTS server_shop (guildId TEXT NOT NULL, itemName TEXT NOT NULL, roleId TEXT NOT NULL, price INTEGER NOT NULL, PRIMARY KEY (guildId, itemName))');
 });
 
 // ---------------------------
@@ -901,10 +902,27 @@ client.once(Events.ClientReady, async () => {
             { name: 'daily', description: 'Claim your daily 25 coins' },
             { name: 'balance', description: 'Check coins', options: [{ name: 'user', description: 'User to check', type: ApplicationCommandOptionType.User, required: false }] },
             { name: 'leaderboard', description: 'Top 10 players', options: [{ name: 'scope', description: 'Leaderboard scope', type: ApplicationCommandOptionType.String, required: false, choices: [{ name: 'Global', value: 'global' }, { name: 'Server', value: 'server' }] }] },
-            { name: 'shop', description: 'View shop' },
+            { name: 'shop', description: 'View server shop' },
+            { 
+                name: 'item', 
+                description: 'Manage shop items',
+                default_member_permissions: PermissionFlagsBits.ManageRoles.toString(),
+                options: [
+                    {
+                        name: 'create',
+                        description: 'Create a new shop item',
+                        type: ApplicationCommandOptionType.Subcommand,
+                        options: [
+                            { name: 'name', description: 'Item name', type: ApplicationCommandOptionType.String, required: true },
+                            { name: 'role', description: 'Role to assign', type: ApplicationCommandOptionType.Role, required: true },
+                            { name: 'price', description: 'Price in coins', type: ApplicationCommandOptionType.Integer, required: true }
+                        ]
+                    }
+                ]
+            },
             { name: 'chessquiz', description: 'Get a question (5m cooldown)' },
             { name: 'answer', description: 'Answer the quiz', options: [{ name: 'text', description: 'Your chess answer', type: ApplicationCommandOptionType.String, required: true }] },
-            { name: 'guesstheplayer', description: 'Start Guess the Player (10m cooldown)' },
+            { name: 'guesstheplayer', description: 'Start Guess the Player (10m cooldown, hints cost 5 coins)' },
             { name: 'guess', description: 'Submit your player guess', options: [{ name: 'name', description: 'Player name', type: ApplicationCommandOptionType.String, required: true }] },
             { name: 'ration', description: 'Show your quiz stats' },
             { name: 'questions', description: 'Admin: View quiz questions', default_member_permissions: PermissionFlagsBits.Administrator.toString(), options: [{ name: 'page', description: 'Page number (1-15)', type: ApplicationCommandOptionType.Integer, required: false }] },
@@ -967,50 +985,84 @@ client.on(Events.InteractionCreate, async interaction => {
                 if (!active) { await interaction.followUp({ content: "No active Guess the Player.", ephemeral: true }); return; }
                 const entry = PLAYERS.find(p => p.name === active.playerName);
                 if (!entry) { await interaction.followUp({ content: "This guess is no longer valid.", ephemeral: true }); return; }
+                
+                // Hint cost: 5 coins for hints after the first one
+                const HINT_COST = 5;
+                const data = await getServerUserData(guild.id, user.id);
+                if (data.coins < HINT_COST) {
+                    await interaction.followUp({ content: `❌ You need **${HINT_COST} coins** to reveal another hint!`, ephemeral: true });
+                    return;
+                }
+
+                await addUserCoins(user.id, -HINT_COST, guild.id);
+                const newData = await getServerUserData(guild.id, user.id);
+
                 let idx = active.hintIndex + 1;
                 if (idx > entry.hints.length) idx = entry.hints.length;
                 await setGuessHintIndex(user.id, idx);
+                
                 const shown = entry.hints.slice(0, idx).map((h, i) => `Hint ${i+1}: ${h}`).join('\n');
-                const embed = new EmbedBuilder().setTitle("🕵️ Guess the Player").setDescription(shown).setColor(0x8E44AD);
-                const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_next').setLabel(idx >= entry.hints.length ? 'No more hints' : 'Next Hint').setStyle(idx >= entry.hints.length ? ButtonStyle.Secondary : ButtonStyle.Primary).setDisabled(idx >= entry.hints.length));
+                const embed = new EmbedBuilder()
+                    .setTitle("🕵️ Guess the Player")
+                    .setDescription(shown)
+                    .setColor(0x8E44AD)
+                    .setFooter({ text: `Balance: ${newData.coins} coins • Next hint: 5 coins` });
+
+                const label = idx >= entry.hints.length ? 'No more hints' : `Next Hint (5 Coins)`;
+                const row = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('guess_next')
+                        .setLabel(label)
+                        .setStyle(idx >= entry.hints.length ? ButtonStyle.Secondary : ButtonStyle.Primary)
+                        .setDisabled(idx >= entry.hints.length)
+                );
                 await interaction.editReply({ embeds: [embed], components: [row] });
                 return;
             }
             if (customId.startsWith('shop_buy:')) {
                 const itemName = customId.split(':')[1];
-                const item = SHOP.find(s => s.name === itemName);
-                if (!item) { await interaction.followUp({ content: "Item not found.", ephemeral: true }); return; }
+                const shopItems = await dbAll('SELECT * FROM server_shop WHERE guildId = ?', [guild.id]);
+                const item = shopItems.find(s => s.itemName === itemName);
+                if (!item) { await interaction.followUp({ content: "Item no longer exists in the shop.", ephemeral: true }); return; }
+                
                 const member = await guild.members.fetch(user.id);
-                const role = guild.roles.cache.find(r => r.name === item.name);
-                if (!role) { await interaction.followUp({ content: `Role "${item.name}" not found in this server. Please contact an admin to create it.`, ephemeral: true }); return; }
+                const role = guild.roles.cache.get(item.roleId);
+                if (!role) { await interaction.followUp({ content: `The role associated with this item no longer exists.`, ephemeral: true }); return; }
                 if (member.roles.cache.has(role.id)) { await interaction.followUp({ content: "You already own this role.", ephemeral: true }); return; }
+                
                 const data = await getServerUserData(guild.id, user.id);
                 if (data.coins < item.price) { await interaction.followUp({ content: "Insufficient funds in this server to buy this item.", ephemeral: true }); return; }
+                
                 await member.roles.add(role.id);
                 await addUserCoins(user.id, -item.price, guild.id);
+                
                 const newMember = await guild.members.fetch(user.id);
                 const newData = await getServerUserData(guild.id, user.id);
-                const fields = SHOP.map(s => {
-                    const sRole = guild.roles.cache.find(r => r.name === s.name);
+                
+                const fields = shopItems.map(s => {
+                    const sRole = guild.roles.cache.get(s.roleId);
                     const owned = sRole ? newMember.roles.cache.has(sRole.id) : false;
-                    const roleMention = sRole ? `<@&${sRole.id}>` : `Role "${s.name}" (Not Found)`;
+                    const roleMention = sRole ? `<@&${sRole.id}>` : `Unknown Role`;
                     const ownedTxt = owned ? "Already Owned" : "Not Owned";
-                    return { name: `♟️ ${s.name}`, value: `📝 Description: ${s.description}\n💰 Price: ${s.price} coins\n🎭 Role: ${roleMention}\n✅ Status: ${ownedTxt}`, inline: false };
+                    return { name: `♟️ ${s.itemName}`, value: `💰 Price: ${s.price} coins\n🎭 Role: ${roleMention}\n✅ Status: ${ownedTxt}`, inline: false };
                 });
+                
                 const embed = new EmbedBuilder().setTitle(`🛒 Server Shop • Balance: ${newData.coins} coins`).addFields(fields).setColor(0x3498DB);
-                const buttons = SHOP.map(s => {
-                    const sRole = guild.roles.cache.find(r => r.name === s.name);
+                const buttons = shopItems.map(s => {
+                    const sRole = guild.roles.cache.get(s.roleId);
                     const owned = sRole ? newMember.roles.cache.has(sRole.id) : false;
-                    const label = owned ? `Owned: ${s.name}` : `Buy ${s.name} • ${s.price} Coins`;
-                    return new ButtonBuilder().setCustomId(`shop_buy:${s.name}`).setLabel(label).setEmoji('🛒').setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Primary).setDisabled(owned);
+                    const label = owned ? `Owned: ${s.itemName}` : `Buy ${s.itemName} • ${s.price} Coins`;
+                    return new ButtonBuilder().setCustomId(`shop_buy:${s.itemName}`).setLabel(label).setEmoji('🛒').setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Primary).setDisabled(owned);
                 });
+                
                 const rows = [];
                 for (let i = 0; i < buttons.length; i += 5) {
                     rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
                 }
                 rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_close').setLabel('Close Shop').setEmoji('🧹').setStyle(ButtonStyle.Danger)));
+                
                 await interaction.editReply({ embeds: [embed], components: rows });
-                await interaction.followUp({ content: `You successfully bought the ${item.name} role!`, ephemeral: true });
+                await interaction.followUp({ content: `You successfully bought the ${item.itemName} role!`, ephemeral: true });
                 return;
             }
             return;
@@ -1144,20 +1196,39 @@ client.on(Events.InteractionCreate, async interaction => {
                     const embed = new EmbedBuilder().setTitle("⏳ Cooldown Active").setDescription(`Try again in **${h}h ${m}m**.`).setColor(0x95A5A6);
                     return interaction.editReply({ embeds: [embed] });
                 }
+                const data = await getServerUserData(guild.id, user.id);
                 const active = await getGuessActive(user.id);
                 if (active) {
                     const entry = PLAYERS.find(p => p.name === active.playerName);
                     const idx = Math.max(1, active.hintIndex);
                     const shown = entry ? entry.hints.slice(0, idx).map((h, i) => `Hint ${i+1}: ${h}`).join('\n') : "No hints available.";
-                    const embed = new EmbedBuilder().setTitle("🕵️ Guess the Player").setDescription(shown).setColor(0x8E44AD).setFooter({ text: "One guess only • Use /guess to answer" });
-                    const rowComp = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_next').setLabel('Next Hint').setStyle(ButtonStyle.Primary));
+                    const embed = new EmbedBuilder()
+                        .setTitle("🕵️ Guess the Player")
+                        .setDescription(shown)
+                        .setColor(0x8E44AD)
+                        .setFooter({ text: `Balance: ${data.coins} coins • Next hint: 5 coins` });
+                    const rowComp = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder()
+                            .setCustomId('guess_next')
+                            .setLabel('Next Hint (5 Coins)')
+                            .setStyle(ButtonStyle.Primary)
+                    );
                     return interaction.editReply({ embeds: [embed], components: [rowComp] });
                 }
                 const entry = PLAYERS[Math.floor(Math.random() * PLAYERS.length)];
                 await setGuessActive(user.id, entry.name);
                 const first = entry.hints[0] || "No hint.";
-                const embed = new EmbedBuilder().setTitle("🕵️ Guess the Player").setDescription(`Hint 1: ${first}`).setColor(0x8E44AD).setFooter({ text: "One guess only • Use /guess to answer" });
-                const rowComp = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_next').setLabel('Next Hint').setStyle(ButtonStyle.Primary));
+                const embed = new EmbedBuilder()
+                    .setTitle("🕵️ Guess the Player")
+                    .setDescription(`Hint 1: ${first}`)
+                    .setColor(0x8E44AD)
+                    .setFooter({ text: `Balance: ${data.coins} coins • Next hint: 5 coins` });
+                const rowComp = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('guess_next')
+                        .setLabel('Next Hint (5 Coins)')
+                        .setStyle(ButtonStyle.Primary)
+                );
                 return interaction.editReply({ embeds: [embed], components: [rowComp] });
             }
 
@@ -1212,16 +1283,21 @@ client.on(Events.InteractionCreate, async interaction => {
             }
 
             if (commandName === 'shop') {
+                const shopItems = await dbAll('SELECT * FROM server_shop WHERE guildId = ?', [guild.id]);
+                if (shopItems.length === 0) {
+                    return interaction.editReply({ content: "Currently there is no shop", ephemeral: true });
+                }
+
                 const member = await guild.members.fetch(user.id);
                 const data = await getServerUserData(guild.id, user.id);
-                const fields = SHOP.map(s => {
-                    const sRole = guild.roles.cache.find(r => r.name === s.name);
+                const fields = shopItems.map(s => {
+                    const sRole = guild.roles.cache.get(s.roleId);
                     const owned = sRole ? member.roles.cache.has(sRole.id) : false;
-                    const roleMention = sRole ? `<@&${sRole.id}>` : `Role "${s.name}" (Not Found)`;
+                    const roleMention = sRole ? `<@&${sRole.id}>` : `Unknown Role`;
                     const ownedTxt = owned ? "Already Owned" : "Not Owned";
                     return {
-                        name: `♟️ ${s.name}`,
-                        value: `📝 Description: ${s.description}\n💰 Price: ${s.price} coins\n🎭 Role: ${roleMention}\n✅ Status: ${ownedTxt}`,
+                        name: `♟️ ${s.itemName}`,
+                        value: `💰 Price: ${s.price} coins\n🎭 Role: ${roleMention}\n✅ Status: ${ownedTxt}`,
                         inline: false
                     };
                 });
@@ -1229,12 +1305,12 @@ client.on(Events.InteractionCreate, async interaction => {
                     .setTitle(`🛒 Server Shop • Balance: ${data.coins} coins`)
                     .addFields(fields)
                     .setColor(0x3498DB);
-                const buttons = SHOP.map(s => {
-                    const sRole = guild.roles.cache.find(r => r.name === s.name);
+                const buttons = shopItems.map(s => {
+                    const sRole = guild.roles.cache.get(s.roleId);
                     const owned = sRole ? member.roles.cache.has(sRole.id) : false;
-                    const label = owned ? `Owned: ${s.name}` : `Buy ${s.name} • ${s.price} Coins`;
+                    const label = owned ? `Owned: ${s.itemName}` : `Buy ${s.itemName} • ${s.price} Coins`;
                     return new ButtonBuilder()
-                        .setCustomId(`shop_buy:${s.name}`)
+                        .setCustomId(`shop_buy:${s.itemName}`)
                         .setLabel(label)
                         .setEmoji('🛒')
                         .setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Primary)
@@ -1248,6 +1324,27 @@ client.on(Events.InteractionCreate, async interaction => {
                     new ButtonBuilder().setCustomId('shop_close').setLabel('Close Shop').setEmoji('🧹').setStyle(ButtonStyle.Danger)
                 ));
                 return interaction.editReply({ embeds: [embed], components: rows });
+            }
+
+            if (commandName === 'item') {
+                const sub = options.getSubcommand();
+                if (sub === 'create') {
+                    const name = options.getString('name');
+                    const role = options.getRole('role');
+                    const price = options.getInteger('price');
+
+                    const countResult = await dbAll('SELECT COUNT(*) as c FROM server_shop WHERE guildId = ?', [guild.id]);
+                    const count = countResult[0].c;
+                    if (count >= 10) {
+                        return interaction.editReply({ content: "All slots are full", ephemeral: true });
+                    }
+
+                    await new Promise((res, rej) => {
+                        db.run('INSERT OR REPLACE INTO server_shop (guildId, itemName, roleId, price) VALUES (?, ?, ?, ?)', [guild.id, name, role.id, price], e => e ? rej(e) : res());
+                    });
+
+                    return interaction.editReply(`✅ Item **${name}** created for **${price}** coins!`);
+                }
             }
 
             if (commandName === 'addmoney') {
