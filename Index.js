@@ -1438,7 +1438,7 @@ client.on(Events.InteractionCreate, async interaction => {
             }
 
             if (commandName === 'shop') {
-                const shopItems = await dbAll('SELECT * FROM server_shop WHERE guildId = ?', [guild.id]);
+                const shopItems = await dbAll('SELECT * FROM server_shop WHERE guildId = ? ORDER BY price ASC', [guild.id]);
                 if (shopItems.length === 0) {
                     const embed = new EmbedBuilder()
                         .setAuthor({ name: "🛒 Grandmaster's Boutique" })
@@ -1474,7 +1474,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 const buttons = shopItems.map(s => {
                     const sRole = guild.roles.cache.get(s.roleId);
                     const owned = sRole ? member.roles.cache.has(sRole.id) : false;
-                    const label = owned ? `Owned: ${s.itemName}` : `Buy ${s.itemName} (${s.price})`;
+                    const label = owned ? `Owned` : `${s.price} Coins`;
                     return new ButtonBuilder()
                         .setCustomId(`shop_buy:${s.itemName}`)
                         .setLabel(label)
