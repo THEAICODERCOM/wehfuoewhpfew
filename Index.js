@@ -1355,17 +1355,6 @@ const QUIZ_POOL = [
     { id: 658, type: "basketball", question: "Which player is nicknamed 'The Slim Reaper'?", answer: "Kevin Durant", reward: 10 },
     { id: 659, type: "basketball", question: "Which team won the 2021 NBA Championship?", answer: "Milwaukee Bucks", reward: 10 },
     { id: 660, type: "basketball", question: "Who is the head coach of the Miami Heat?", answer: "Erik Spoelstra", reward: 15 },
-    // Boxing Quiz (901-1200)
-    { id: 901, type: "boxing", question: "Who is known as 'The Greatest'?", answer: "Muhammad Ali", reward: 5 },
-    { id: 902, type: "boxing", question: "Who holds the record for the most heavyweight title defenses?", answer: "Joe Louis", reward: 15 },
-    { id: 903, type: "boxing", question: "Which boxer is nicknamed 'Iron Mike'?", answer: "Mike Tyson", reward: 5 },
-    { id: 904, type: "boxing", question: "How many weight classes did Manny Pacquiao win titles in?", answer: "8", reward: 15 },
-    { id: 905, type: "boxing", question: "Who defeated Muhammad Ali in the 'Fight of the Century'?", answer: "Joe Frazier", reward: 15 },
-    { id: 906, type: "boxing", question: "Which boxer is known as 'The Golden Boy'?", answer: "Oscar De La Horna", reward: 10 },
-    { id: 907, type: "boxing", question: "What is the standard length of a professional boxing round?", answer: "3 minutes", reward: 5 },
-    { id: 908, type: "boxing", question: "Who is the only undefeated heavyweight champion to retire at 49-0?", answer: "Rocky Marciano", reward: 15 },
-    { id: 909, type: "boxing", question: "Which boxer is nicknamed 'Money'?", answer: "Floyd Mayweather", reward: 5 },
-    { id: 910, type: "boxing", question: "Who won the 'Rumble in the Jungle'?", answer: "Muhammad Ali", reward: 10 }
 ];
 
 const SHOP = [
@@ -2378,9 +2367,7 @@ client.once(Events.ClientReady, async () => {
                         choices: [
                             { name: 'Chess', value: 'chess' },
                             { name: 'Football', value: 'football' },
-                            { name: 'Basketball', value: 'basketball' },
-                            { name: 'Boxing', value: 'boxing' },
-                            { name: 'YouTube', value: 'youtube' }
+                            { name: 'Basketball', value: 'basketball' }
                         ]
                     }
                 ]
