@@ -1417,9 +1417,7 @@ client.once(Events.ClientReady, async () => {
                         choices: [
                             { name: 'Chess', value: 'chess' },
                             { name: 'Football', value: 'football' },
-                            { name: 'Basketball', value: 'basketball' },
-                            { name: 'Boxing', value: 'boxing' },
-                            { name: 'YouTube', value: 'youtube' }
+                            { name: 'Basketball', value: 'basketball' }
                         ]
                     }
                 ]
@@ -1449,8 +1447,29 @@ client.once(Events.ClientReady, async () => {
             { name: 'removemoney', description: 'Admin: Remove coins', default_member_permissions: ADMIN_PERMS.toString(), options: [{ name: 'user', description: 'User to remove coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to remove', type: ApplicationCommandOptionType.Integer, required: true }] }
         ]);
         console.log(`✅ Logged in as ${client.user.tag}`);
-    } catch (err) {
-        console.error("Command Registration Error:", err);
+
+        // Initialize default shop for all guilds if empty
+        for (const [guildId, guild] of client.guilds.cache) {
+            try {
+                const currentShop = await dbAll('SELECT * FROM server_shop WHERE guildId = ?', [guildId]);
+                if (currentShop.length === 0) {
+                    console.log(`ℹ️ Populating default shop for guild: ${guild.name} (${guildId})`);
+                    for (const item of SHOP) {
+                        await new Promise((res, rej) => {
+                            db.run(
+                                'INSERT OR IGNORE INTO server_shop (guildId, itemName, roleId, price) VALUES (?, ?, ?, ?)',
+                                [guildId, item.name, item.roleId, item.price],
+                                e => e ? rej(e) : res()
+                            );
+                        });
+                    }
+                }
+            } catch (err) {
+                console.error(`❌ Error initializing shop for guild ${guildId}:`, err);
+            }
+        }
+    } catch (error) {
+        console.error("Command Registration Error:", error);
     }
 });
 
