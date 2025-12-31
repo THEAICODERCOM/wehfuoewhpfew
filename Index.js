@@ -906,7 +906,7 @@ client.once(Events.ClientReady, async () => {
             { 
                 name: 'item', 
                 description: 'Manage shop items',
-                default_member_permissions: PermissionFlagsBits.ManageRoles.toString(),
+                default_member_permissions: PermissionFlagsBits.Administrator.toString(),
                 options: [
                     {
                         name: 'create',
@@ -916,6 +916,25 @@ client.once(Events.ClientReady, async () => {
                             { name: 'name', description: 'Item name', type: ApplicationCommandOptionType.String, required: true },
                             { name: 'role', description: 'Role to assign', type: ApplicationCommandOptionType.Role, required: true },
                             { name: 'price', description: 'Price in coins', type: ApplicationCommandOptionType.Integer, required: true }
+                        ]
+                    },
+                    {
+                        name: 'edit',
+                        description: 'Edit an existing shop item (Admins only)',
+                        type: ApplicationCommandOptionType.Subcommand,
+                        options: [
+                            { name: 'name', description: 'The current name of the item to edit', type: ApplicationCommandOptionType.String, required: true },
+                            { name: 'new_name', description: 'New name for the item', type: ApplicationCommandOptionType.String, required: false },
+                            { name: 'price', description: 'New price for the item', type: ApplicationCommandOptionType.Integer, required: false },
+                            { name: 'role', description: 'New role for the item', type: ApplicationCommandOptionType.Role, required: false }
+                        ]
+                    },
+                    {
+                        name: 'delete',
+                        description: 'Delete an item or the entire shop (Admins only)',
+                        type: ApplicationCommandOptionType.Subcommand,
+                        options: [
+                            { name: 'name', description: 'Item name to delete, or type "all" to clear the shop', type: ApplicationCommandOptionType.String, required: true }
                         ]
                     }
                 ]
@@ -1329,6 +1348,9 @@ client.on(Events.InteractionCreate, async interaction => {
             if (commandName === 'item') {
                 const sub = options.getSubcommand();
                 if (sub === 'create') {
+                    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return interaction.editReply({ content: "❌ Only Administrators can create shop items.", ephemeral: true });
+                    }
                     const name = options.getString('name');
                     const role = options.getRole('role');
                     const price = options.getInteger('price');
@@ -1344,6 +1366,63 @@ client.on(Events.InteractionCreate, async interaction => {
                     });
 
                     return interaction.editReply(`✅ Item **${name}** created for **${price}** coins!`);
+                }
+
+                if (sub === 'edit') {
+                    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return interaction.editReply({ content: "❌ Only Administrators can edit shop items.", ephemeral: true });
+                    }
+                    const name = options.getString('name');
+                    const newName = options.getString('new_name');
+                    const newPrice = options.getInteger('price');
+                    const newRole = options.getRole('role');
+
+                    const item = (await dbAll('SELECT * FROM server_shop WHERE guildId = ? AND itemName = ?', [guild.id, name]))[0];
+                    if (!item) return interaction.editReply({ content: `❌ Item **${name}** not found.`, ephemeral: true });
+
+                    if (newName) {
+                        await new Promise((res, rej) => {
+                            db.run('UPDATE server_shop SET itemName = ? WHERE guildId = ? AND itemName = ?', [newName, guild.id, name], e => e ? rej(e) : res());
+                        });
+                    }
+                    
+                    const currentName = newName || name;
+                    
+                    if (newPrice !== null) {
+                        await new Promise((res, rej) => {
+                            db.run('UPDATE server_shop SET price = ? WHERE guildId = ? AND itemName = ?', [newPrice, guild.id, currentName], e => e ? rej(e) : res());
+                        });
+                    }
+                    
+                    if (newRole) {
+                        await new Promise((res, rej) => {
+                            db.run('UPDATE server_shop SET roleId = ? WHERE guildId = ? AND itemName = ?', [newRole.id, guild.id, currentName], e => e ? rej(e) : res());
+                        });
+                    }
+                    
+                    return interaction.editReply(`✅ Successfully updated item **${name}**!`);
+                }
+
+                if (sub === 'delete') {
+                    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                        return interaction.editReply({ content: "❌ Only Administrators can delete shop items.", ephemeral: true });
+                    }
+                    const name = options.getString('name');
+                    if (name.toLowerCase() === 'all') {
+                        await new Promise((res, rej) => {
+                            db.run('DELETE FROM server_shop WHERE guildId = ?', [guild.id], e => e ? rej(e) : res());
+                        });
+                        return interaction.editReply("✅ Successfully deleted the entire shop for this server.");
+                    } else {
+                        const result = await new Promise((res, rej) => {
+                            db.run('DELETE FROM server_shop WHERE guildId = ? AND itemName = ?', [guild.id, name], function(e) {
+                                if (e) rej(e);
+                                else res(this.changes);
+                            });
+                        });
+                        if (result === 0) return interaction.editReply({ content: `❌ Item **${name}** not found.`, ephemeral: true });
+                        return interaction.editReply(`✅ Successfully deleted item **${name}**.`);
+                    }
                 }
             }
 
