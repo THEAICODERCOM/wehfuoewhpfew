@@ -756,90 +756,72 @@ Creative thinker
 Major theoretical innovator
 Influential author
 Famous sacrifice ideas
-37. Soviet Chess School (Botvinnik legacy)
-Revolutionized training methods
-Emphasized deep analysis
-Structured thinking
-Influence still visible today
-Systematic preparation
-38. Bent Larsen
+37. Bent Larsen
 Western chess hope
 Highly original openings
 Challenged Soviet dominance
 Fearless attacker
 Unorthodox style
-39. Peter Svidler
+38. Peter Svidler
 Grünfeld Defense expert
 Top-level commentator
 Multiple-time Russian champion
 Known for humor
 Elite theoretician
-40. Wesley So (Rapid Chess)
+39. Wesley So
 Multiple-time rapid world champion
 Endgame machine
 Extremely clean technique
 Rarely blunders
 Ice-cold nerves
-41. Hou Yifan
+40. Hou Yifan
 Strongest active female player
 Competed regularly vs top GMs
 Academic career alongside chess
 Strategic style
 Global role model
-42. AlphaZero (Bonus)
-AI that revolutionized chess
-Played Tal-like sacrifices
-Learned without human input
-Changed opening theory
-Inspired modern engines
-43. Fischer (Theoretical Impact)
+41. Fischer
 Invented Fischer Random (Chess960)
 Hated quick draws
 Opening innovator
 Endgame perfectionist
 Absolute perfectionist mindset
-44. Viktor Korchnoi
+42. Viktor Korchnoi
 Fierce lifelong fighter
 Political defector
 Extreme willpower
 Never became world champion
 Legendary mental toughness
-45. Daniil Dubov
+43. Daniil Dubov
 Creative Carlsen second
 Loves sacrifices
 Modern attacking ideas
 Blitz specialist
 Highly unconventional
-46. Arjun Erigaisi
+44. Arjun Erigaisi
 One of the fastest rating climbs ever
 Extremely aggressive
 New-generation star
 Fearless approach
 Strong calculation
-47. Nihal Sarin
+45. Nihal Sarin
 Blitz prodigy
 Lightning-fast moves
 Online chess monster
 Tactical vision
 Very young elite
-48. Gata Kamsky
+46. Gata Kamsky
 World championship finalist
 Legendary comeback story
 Calm personality
 Solid style
 Long elite career
-49. Alexander Grischuk
+47. Alexander Grischuk
 Famous for time trouble
 Elite blitz player
 Very humorous
 Risk-taking style
 Massive experience
-50. Magnus Carlsen (Mental Edge)
-Wins from “nothing”
-Hates quick draws
-Applies constant psychological pressure
-Tortures opponents in endgames
-Central figure in the GOAT debate
 `;
 
 let PLAYERS = [];
@@ -1269,4 +1251,3 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 });
 client.login(DISCORD_TOKEN);
-
