@@ -1116,7 +1116,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 let rows;
                 if (scope === 'server' && guild) {
                     rows = await dbAll(
-                        'SELECT u.userId, u.coins FROM users u INNER JOIN guild_users g ON g.userId = u.userId WHERE g.guildId = ? ORDER BY u.coins DESC LIMIT 10',
+                        'SELECT userId, coins FROM server_coins WHERE guildId = ? ORDER BY coins DESC LIMIT 10',
                         [guild.id]
                     );
                 } else {
