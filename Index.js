@@ -1446,11 +1446,44 @@ client.once(Events.ClientReady, async () => {
             { name: 'ration', description: 'Show your quiz stats' },
             { name: 'questions', description: 'Admin: View quiz questions', default_member_permissions: ADMIN_PERMS.toString(), options: [{ name: 'page', description: 'Page number (1-15)', type: ApplicationCommandOptionType.Integer, required: false }] },
             { name: 'addmoney', description: 'Admin: Add coins', default_member_permissions: ADMIN_PERMS.toString(), options: [{ name: 'user', description: 'User to give coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to add', type: ApplicationCommandOptionType.Integer, required: true }] },
-            { name: 'removemoney', description: 'Admin: Remove coins', default_member_permissions: ADMIN_PERMS.toString(), options: [{ name: 'user', description: 'User to remove coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to remove', type: ApplicationCommandOptionType.Integer, required: true }] }
+            { name: 'removemoney', description: 'Admin: Remove coins', default_member_permissions: ADMIN_PERMS.toString(), options: [{ name: 'user', description: 'User to remove coins', type: ApplicationCommandOptionType.User, required: true }, { name: 'amount', description: 'Amount of coins to remove', type: ApplicationCommandOptionType.Integer, required: true }] },
+            { name: 'help', description: 'Display all commands and how to use them' }
         ]);
         console.log(`✅ Logged in as ${client.user.tag}`);
     } catch (error) {
         console.error("Command Registration Error:", error);
+    }
+});
+
+client.on(Events.MessageCreate, async message => {
+    if (message.author.bot) return;
+    if (message.mentions.has(client.user) && !message.mentions.everyone) {
+        const embed = new EmbedBuilder()
+            .setTitle("🤖 Bot Commands")
+            .setDescription("Here are all available commands and how to use them:")
+            .addFields(
+                { 
+                    name: '💎 Economy & Daily', 
+                    value: '`/daily` - Claim your daily 25 coins\n`/balance [user]` - Check your or someone else\'s coin balance\n`/leaderboard [scope]` - View top players (Global or Server)' 
+                },
+                { 
+                    name: '🎮 Games & Quizzes', 
+                    value: '`/quiz <type>` - Start a quiz (Chess, Football, Basketball). 1m to answer, 5m cooldown\n`/answer <text>` - Submit your answer to the active quiz\n`/guesstheplayer <type>` - Start "Guess the Player". Hints cost 5 coins, 10m cooldown\n`/guess <name>` - Submit your player guess\n`/ration` - View your quiz accuracy and statistics' 
+                },
+                { 
+                    name: '🛒 Server Shop', 
+                    value: '`/shop` - View items available in this server\'s shop\n`/item buy <name>` - Purchase a role from the shop' 
+                },
+                { 
+                    name: '🛠️ Admin Commands', 
+                    value: '`/item create <name> <role> <price>` - Add a new item to the shop\n`/item edit <name> [new_name] [price] [role]` - Edit a shop item\n`/item delete <name>` - Remove an item from the shop\n`/shop-delete-all` - Clear the entire server shop\n`/addmoney <user> <amount>` - Add coins to a user\n`/removemoney <user> <amount>` - Remove coins from a user\n`/questions [page]` - View all quiz questions' 
+                }
+            )
+            .setColor(0x3498DB)
+            .setFooter({ text: "Tip: Use /help for this menu anytime!" })
+            .setTimestamp();
+        
+        await message.reply({ embeds: [embed] }).catch(() => {});
     }
 });
 
