@@ -4,13 +4,14 @@ const { Client, GatewayIntentBits, ApplicationCommandOptionType, EmbedBuilder, P
 const ADMIN_PERMS = PermissionFlagsBits.ManageRoles | PermissionFlagsBits.ManageMessages;
 const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
+const path = require('path');
 
 // ---------------------------
 // Load token
 // ---------------------------
 let DISCORD_TOKEN; 
 try {
-    DISCORD_TOKEN = fs.readFileSync('./token.txt', 'utf8').trim();
+    DISCORD_TOKEN = fs.readFileSync(path.join(__dirname, 'token.txt'), 'utf8').trim();
 } catch {
     console.error("CRITICAL: token.txt is missing!");
     process.exit(1);
@@ -20,7 +21,8 @@ try {
 // Client & Database
 // ---------------------------
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
-const db = new sqlite3.Database('./data.sqlite');
+const dbPath = path.join(__dirname, 'data.sqlite');
+const db = new sqlite3.Database(dbPath);
 db.configure('busyTimeout', 5000);
 
 db.serialize(() => {
